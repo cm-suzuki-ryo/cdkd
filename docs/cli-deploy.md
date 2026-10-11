@@ -1,70 +1,172 @@
 ---
 title: "Deploy: waits & concurrency"
-description: "cdkd deploy wait and concurrency flags — the concurrency knobs, the per-resource-type wait-semantics table, and --no-wait / --full-wait."
+description: "What cdkd deploy does, every cdkd deploy flag and where it is explained, the concurrency flags, and how long a deploy waits for each resource type."
 ---
 
 # Deploy: waits & concurrency
 
-`cdkd deploy` decides two things you can tune from the command line: how many
-operations it runs at once, and how long it waits before calling a resource
-done. This page covers both, plus what the wait mode does and does not change
-about the stack lock. The rest of the deploy flags live under
-[Deploy: tuning](cli-deploy-tuning.md) and
-[Deploy: safety & compatibility flags](cli-deploy-safety.md).
+`cdkd deploy` creates or updates the stacks of a CDK app. This page is the
+entry to the deploy pages: it lists every deploy flag with a link to where the
+flag is explained. It also covers the two settings people tune most, which are
+how many operations run at once and how long cdkd waits before it treats a
+resource as done.
 
 ```bash
-cdkd deploy                            # default waits, default concurrency
-cdkd deploy --no-wait                  # skip the stabilization waits
-cdkd deploy --full-wait                # also wait everywhere CloudFormation waits
-cdkd deploy --concurrency 20           # more parallel resource operations
-cdkd deploy --stack-concurrency 8      # more parallel stacks
+# default waits, default concurrency
+cdkd deploy MyStack
+
+# every top-level stack
+cdkd deploy --all
+
+# skip the stabilization waits
+cdkd deploy MyStack --no-wait
+
+# also wait everywhere CloudFormation waits
+cdkd deploy MyStack --full-wait
+
+# more parallel resource operations
+cdkd deploy MyStack --concurrency 20
+
+# more stacks at once
+cdkd deploy --all --stack-concurrency 8
 ```
+
+## What a deploy does
+
+A deploy synthesizes the CDK app and publishes the file and container assets
+its stacks use. For each stack, it compares the synthesized template with the
+state cdkd recorded on the previous deploy, and then creates, updates or
+deletes the resources that differ. Resources that do not depend on each other
+are handled in parallel.
+
+cdkd holds a lock on the stack while it works, so that two runs cannot change
+the same stack at once. If a resource fails, cdkd rolls back what the deploy
+had done to that stack, unless you pass `--no-rollback`.
 
 ## Options
 
+Run `cdkd deploy --help` for the same list in the terminal. The flags are
+grouped here by what they control.
+
+### Which stacks to deploy
+
+[Selecting stacks](cli-list.md#selecting-stacks) explains how names and
+patterns are matched.
+
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--concurrency <n>` | `10` | Maximum concurrent resource operations per stack. |
-| `--stack-concurrency <n>` | `4` | Maximum concurrent stack deployments. |
-| `--asset-publish-concurrency <n>` | `8` | Maximum concurrent asset publishes (S3 upload + ECR push). |
-| `--image-build-concurrency <n>` | `4` | Maximum concurrent Docker image builds. |
-| `--no-wait` | off | Skip the stabilization waits cdkd performs by default. Deploy-only. |
-| `--full-wait` | off | Also wait everywhere CloudFormation waits. Deploy-only. |
+| `[stacks...]`, `--stack <name>` | the only stack | Stacks to deploy: CDK display paths with wildcards, or exact physical names. |
+| `--all` | `false` | Deploy every top-level stack. |
+| `-e`, `--exclusively` | `false` | Deploy only the requested stacks, without their dependencies. |
 
-`--no-wait` and `--full-wait` are opposite ends of one axis and cannot be
-combined; cdkd rejects the pair before any AWS call. Neither is accepted by
-`cdkd destroy`, and neither can be scoped to a single resource type — they
-apply to the whole run.
+### Concurrency and waits
+
+These six flags are explained on this page.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--concurrency <number>` | `10` | Maximum concurrent resource operations per stack. |
+| `--stack-concurrency <number>` | `4` | Maximum concurrent stack deployments. |
+| `--asset-publish-concurrency <number>` | `8` | Maximum concurrent asset publishes (S3 uploads and ECR pushes). |
+| `--image-build-concurrency <number>` | `4` | Maximum concurrent Docker image builds. |
+| `--no-wait` | off | Skip the stabilization waits cdkd performs by default. See [Wait modes](#wait-modes). |
+| `--full-wait` | off | Also wait everywhere CloudFormation waits. See [Wait modes](#wait-modes). |
+
+### What the run changes
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dry-run` | `false` | Show the changes without applying them. |
+| `--skip-assets` | `false` | Skip asset publishing. |
+| `--no-rollback` | rollback on | Leave a failed deploy in place and skip the automatic rollback. See [Rollback](rollback.md). |
+| `--require-approval <level>` | `never` | Ask before `any-change` or `destructive` changes. See [Deploy: safety & compatibility flags](cli-deploy-safety.md). |
+
+### Assets
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--no-auto-asset-storage` | auto-create on | Do not create cdkd asset storage on the first deploy into a region. See [Auto-create on first deploy](cli-bootstrap.md#auto-create-on-first-deploy). |
+| `--use-cdk-bootstrap-assets` | `false` | Publish to the CDK bootstrap bucket and repository. See [Keeping CDK bootstrap destinations](cli-bootstrap.md#keeping-cdk-bootstrap-destinations). |
+
+### Tuning
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--resource-warn-after <duration>` | `5m` | Warn about one slow resource operation. See [Per-resource timeout](cli-deploy-tuning.md#per-resource-timeout). |
+| `--resource-timeout <duration>` | `30m` | Abort one slow resource operation. See [Per-resource timeout](cli-deploy-tuning.md#per-resource-timeout). |
+| `--prefix-user-supplied-names` | `false` | Prefix declared physical names with the stack name. See [`--prefix-user-supplied-names`](cli-deploy-tuning.md#prefix-user-supplied-names). |
+| `--no-capture-observed-state` | capture on | Skip recording the drift baseline. See [`--no-capture-observed-state`](cli-deploy-tuning.md#no-capture-observed-state). |
+| `--no-aggressive-vpc-parallel` | relaxation on | Keep CDK's defensive VPC route ordering. See [`--no-aggressive-vpc-parallel`](cli-deploy-tuning.md#no-aggressive-vpc-parallel). |
+| `--strict`, `--ignore-errors` | `false` | Fail on CDK warning annotations, or never fail on annotations. See [CDK annotation messages](cli-deploy-tuning.md#cdk-annotation-messages). |
+
+### Safety and compatibility
+
+[Deploy: safety & compatibility flags](cli-deploy-safety.md) explains every
+flag in this group, except `--skip-final-snapshot`, which is on
+[Destroy flags & guards](cli-destroy.md).
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--replace` | `false` | Replace a resource whose in-place update AWS rejects. |
+| `--force-stateful-recreation` | `false` | Confirm a data-losing replacement of a stateful resource. |
+| `--recreate-via-cc-api <logicalId>`, `--recreate-via-sdk-provider <logicalId>` | | Destroy and recreate one resource on the other provisioning route. |
+| `--pin-cc-api <logicalId>` | | Keep one resource on the Cloud Control route. |
+| `--prefer-sdk-route <entries>` | | Keep a resource on the SDK provider when a property would route it to Cloud Control. |
+| `--allow-unsupported-types <types>` | | Attempt types cdkd reports unsupported through Cloud Control. |
+| `--strict-getatt` | `false` | Fail on an `Fn::GetAtt` cdkd cannot construct, or an Output it cannot resolve. |
+| `--no-cfn-fallback` | fallback on | Do not look up cross-stack references in CloudFormation. |
+| `--allow-unaddressed` | `false` | Exit `0` when the deploy left a resource unaddressed. |
+| `--skip-final-snapshot` | `false` | Delete `DeletionPolicy: Snapshot` resources without the final snapshot. |
+
+### Shared with other commands
+
+The [CLI Reference](cli-reference.md#options-every-command-takes) explains
+these.
+
+| Flag | Description |
+| --- | --- |
+| `-a`, `--app`, `--output`, `-c`, `--context` | Where the CDK app is and how it is synthesized. |
+| `--state-bucket`, `--state-prefix` | Where state is stored. |
+| `--profile`, `--role-arn`, `-y`, `--yes`, `--verbose` | Shared by every command. |
 
 ## Wait modes
 
-cdkd is **template-compatible** with CloudFormation. It is not
-**wait-semantics-identical**, and does not claim to be. What counts as "done"
-is decided per resource type, and the three modes are:
+Many AWS resources keep working after the API call that creates them returns.
+A NAT gateway stays `pending` for a minute or two, and a CloudFront
+distribution takes 3 to 15 minutes to report `Deployed`. A wait mode decides
+how much of that cdkd sits through before it calls the resource done.
 
-| Mode | What it waits for |
+```bash
+cdkd deploy MyStack               # default
+cdkd deploy MyStack --no-wait     # return as early as possible
+cdkd deploy MyStack --full-wait   # wait as long as CloudFormation would
+```
+
+| Mode | What cdkd waits for |
 | --- | --- |
 | `--no-wait` | Nothing beyond the AWS API call returning. |
-| (default) | Only where the wait is load-bearing — an in-deploy consumer needs the result, or the wait can surface a real failure. |
-| `--full-wait` | Everywhere CloudFormation waits. |
+| default | Only what a later step of the same deploy needs, or what can surface a real failure. |
+| `--full-wait` | Everything CloudFormation waits for. |
 
-Which mode is right depends on whether anything downstream needs the resource
-to actually be serving, **not** on where the deploy runs:
+To choose, ask whether anything after the deploy needs the resource to be
+serving:
 
-- `--no-wait` when nothing runs next and nothing is waiting on completion —
-  preview environments, and cutting billed CI minutes is a perfectly good
-  reason to use it in CI.
-- The default for ordinary use.
-- `--full-wait` when a smoke test, a DNS cutover, or a follow-on job runs
-  immediately after the deploy returns.
+- Use the default for ordinary work.
+- Use `--no-wait` when nothing runs next and nothing is waiting on completion,
+  such as a preview environment. Cutting billed CI minutes is a good reason to
+  use it in CI.
+- Use `--full-wait` when a smoke test, a DNS cutover or a follow-on job runs
+  as soon as the deploy returns.
+
+`--no-wait` and `--full-wait` cannot be combined, and cdkd rejects the pair
+before any AWS call. Both apply to the whole run and cannot be limited to one
+resource type. `cdkd destroy` accepts neither.
 
 ## Wait behaviour by resource type
 
-These are the types whose behaviour differs across the three modes. Other
-types are unaffected by the flags — which does not mean they never wait: a
-DynamoDB table, an EFS file system, an EMR cluster and a dozen more wait for
-their own readiness on create in every mode, because their provider needs the
-result.
+The table lists every resource type whose behaviour differs between the modes.
+The two flags do not affect any other type. The last two columns show what
+CloudFormation and Terraform do, for comparison.
 
 | Resource type | `--no-wait` | Default | `--full-wait` | CloudFormation | Terraform |
 | --- | --- | --- | --- | --- | --- |
@@ -76,591 +178,91 @@ result.
 | `AWS::Neptune::DBCluster` / `DBInstance` | Return after the create call | Wait for `available` (5-10 min) | same as default | Waits | Waits |
 | `AWS::ElastiCache::CacheCluster` etc. | Return after the create call | Wait for `available` | same as default | Waits | Waits |
 | `AWS::EC2::NatGateway` | Return while `pending` | Wait for `available` (1-2 min) | same as default | Waits | Waits |
-| `AWS::EC2::Instance` | Return while `pending`; a public address not yet assigned is omitted from state and re-read from AWS when referenced | Wait for `running` (30-60 s) | same as default | Waits | Waits |
-| `AWS::ElasticLoadBalancingV2::LoadBalancer` | Return while `provisioning`; `DNSName` 503s until active | Wait for `active` (90-180 s) | same as default | Waits | Waits |
-| `AWS::Lambda::MicrovmImage` | Return while `CREATING`; the image ARN resolves first, so outputs still work | Wait for `CREATED` | same as default | Waits | n/a |
-
-Two of these have a routing caveat: for CloudFront and
-`AWS::Lambda::MicrovmImage`, only the SDK provider takes the fast side. A
-resource of either type routed through the Cloud Control API fallback polls to
-the CloudFormation handler's terminal state regardless of the flag.
-
-### CloudFront and ACM, in more detail
-
-A CloudFront distribution's `Fn::GetAtt` values (`Id`, `DomainName`) are final
-in the create / update response, so nothing in the deploy needs `Deployed`.
-
-An ACM certificate is the opposite case, and the one place cdkd's default
-waits where Terraform does not: an un-issued certificate makes a downstream
-CloudFront or ALB create fail outright rather than merely arrive early. When
-that wait runs out, cdkd **deletes** the certificate it requested, so a failed
-deploy leaves nothing behind and repeated attempts do not accumulate
-certificates. That costs nothing — ACM reuses a domain's validation CNAME
-across certificates, so records you add after the failure validate the retry.
-Use `--no-wait` if you want to keep a `PENDING_VALIDATION` certificate
-instead; see [Troubleshooting](troubleshooting.md).
-
-## What `--no-wait` skips, and what it does not
-
-Under `--no-wait` the resource is still fully functional once AWS finishes the
-deployment in the background. Three cases need care.
-
-**NAT Gateway.** `CreateNatGateway` returns the `NatGatewayId` immediately, so
-dependent routes that only need the ID proceed against a still-`pending`
-gateway. This is safe when nothing in the deploy needs actual NAT-routed
-egress — no Lambda invoked during the deploy that reaches the internet, for
-instance.
-
-**EC2 Instance.** cdkd normally verifies after launch that the requested
-`IamInstanceProfile` really did attach: `RunInstances` associates it
-asynchronously and can complete with no profile attached when the profile was
-created moments earlier. That check needs a `running` or `stopped` instance —
-AWS rejects `AssociateIamInstanceProfile` on a `pending` one — so under
-`--no-wait` it is skipped and a warning naming the instance is printed
-instead. If the deploy needs the profile attached, either drop `--no-wait` or
-verify afterwards:
-
-```bash
-aws ec2 describe-iam-instance-profile-associations \
-  --filters Name=instance-id,Values=<instance-id>
-```
-
-**Load balancer capacity reservation.** When an ELBv2 load balancer's template
-sets `MinimumLoadBalancerCapacity` with
-`EnableCapacityReservationProvisionStabilize: true`, the default mode
-additionally polls `DescribeCapacityReservation` until every zone reports
-`provisioned` — bounded at about ten minutes, where a timeout warns and
-continues and a `failed` zone errors. `--no-wait` skips that poll along with
-the `active` wait.
-
-**Elastic IP.** The same hazard applies to an `AWS::EC2::EIP` whose
-`InstanceId` points at an instance created in the same deploy:
-`AssociateAddress` rejects an instance that is not yet `running`. Creating
-such an EIP allocates the address but skips the association; updating one
-attempts the association and degrades to a warning only if AWS actually
-rejects it, so repointing an EIP at an already-running instance still works.
-Both warnings print the exact `aws ec2 associate-address` command to run once
-the instance is up.
-
-**One wait runs regardless of `--no-wait`**: a Lambda-backed
-`AWS::CloudFormation::CustomResource` waits for its backing ServiceToken
-Lambda to reach `Configuration.State === 'Active'` and
-`LastUpdateStatus === 'Successful'` immediately before the synchronous invoke.
-Without it, the invoke fails with `The function is currently in the following
-state: Pending`. The wait is scoped to that invoke — an ordinary Lambda create
-or update returns as soon as the SDK call returns, so a VPC Lambda with no
-synchronous consumer does not block the deploy on the 5-10 minute ENI attach
-window.
-
-`--no-wait` is deploy-only because no destroy path benefits. NAT Gateway
-destroy unconditionally waits for `deleted` to keep teardown ordered — a
-still-`deleting` gateway blocks `DeleteSubnet`, `DeleteInternetGateway` and
-`DeleteVpc` with `DependencyViolation` — and the other eligible types (RDS,
-ElastiCache) are leaves on the destroy DAG, so their providers do not wait
-there anyway. CloudFront's destroy-side disable-then-wait is an API
-requirement and is unaffected by any wait flag. A Kinesis stream or a
-Firehose delivery stream delete also waits until the stream is gone, whatever
-the flags: both services keep the stream's name while it is `DELETING` (up to
-about two minutes for Firehose) and refuse a create of that name with the same
-`already exists` error a live stream gets, so a redeploy right after a destroy
-would fail. The wait warns and moves on rather than failing the delete if it
-runs out.
-
-## What `--full-wait` adds
-
-Two types are affected.
-
-### `AWS::ECS::Service` — steady state
-
-The default returns once `CreateService` / `UpdateService` is accepted, which
-matches Terraform and diverges from CloudFormation on purpose: nothing
-downstream needs the service to be steady (`Fn::GetAtt` yields `Name` and
-`ServiceArn`, both valid immediately), and CloudFormation's steady-state wait
-is what makes a crash-looping image hang a stack for many minutes.
-
-Without `--full-wait`, cdkd prints the command to wait manually:
-
-```text
-aws ecs wait services-stable --cluster <cluster> --services <service>
-```
-
-cdkd deliberately does not probe the rollout on the default path. Right after
-`CreateService` a healthy service and a doomed one look identical (`ACTIVE`,
-`runningCount: 0`, `rolloutState: IN_PROGRESS`); a warning there would fire on
-every deploy and would imply a guarantee a single check cannot back.
-
-Under `--full-wait`, "done" means stable **and** rolled out: after the
-steady-state waiter, cdkd briefly polls the primary deployment's
-`rolloutState` to `COMPLETED`, because ECS flips it a few seconds after
-stability and returning inside that window would be observably weaker than
-CloudFormation. That poll is bounded at about two minutes; a rollout still in
-progress past it warns and continues.
-
-The steady-state wait itself is capped at 600 seconds, matching Terraform's
-`aws_ecs_service` create timeout. A service that legitimately takes longer — a
-large task count, a slow-pulling image, a long health-check grace period — can
-lift the cap with
-[`--resource-timeout`](cli-deploy-tuning.md#per-resource-timeout), e.g.
-`--resource-timeout AWS::ECS::Service=20m`. The flag only raises the cap, never
-lowers it, and the same value governs the outer per-resource deadline, so the
-two cannot undercut each other.
-
-A service that never stabilizes fails the deploy. On create, cdkd best-effort
-deletes the service it just created before failing, so the next deploy does
-not collide on the name. The failure message carries the
-`aws ecs list-tasks --desired-status STOPPED` and `describe-tasks` commands to
-inspect why the tasks stopped — stopped tasks outlive the service deletion by
-about an hour, so the evidence is still there.
-
-### `AWS::CloudFront::Distribution` — `Deployed`
-
-Without `--full-wait`, cdkd prints the command to wait manually:
-
-```text
-aws cloudfront wait distribution-deployed --id <distribution-id>
-```
-
-Under `--full-wait` the wait budget is about 20 minutes, lifted by an explicit
-[`--resource-timeout`](cli-deploy-tuning.md#per-resource-timeout), e.g.
-`--resource-timeout AWS::CloudFront::Distribution=40m` — again raise-only, and
-sharing the outer per-resource deadline.
-
-Unlike the ECS timeout, a CloudFront wait timeout does **not** fail the
-deploy. A distribution still `InProgress` at the budget is slow, not broken —
-there is no failure state to detect — and failing would hand the automatic
-rollback a healthy distribution to disable and delete. cdkd warns with the
-manual wait command and proceeds.
-
-## What the stack lock covers, and when a second deploy can start
-
-A stack lock covers one stack in one region, and is held for as long as the
-command is working on that stack — a multi-stack run releases each stack's lock
-as that stack finishes rather than holding them all to the end. Either way it
-is released when the work finishes, not when the resources it touched finish
-provisioning, so a second `cdkd deploy` on the same stack can start while
-resources the first one created are still coming up.
-
-That holds in every wait mode, not only under `--no-wait`. `--no-wait` widens
-the window by skipping the waits the default mode runs, but the default mode
-already returns before a CloudFront distribution is `Deployed` and before an
-ECS service reaches steady state, and no mode waits on a VPC Lambda's ENI
-attach. `--full-wait` narrows the window to the waits it adds. None of the
-three change what releasing the lock means.
-
-While it is held and being renewed, the lock keeps other cdkd runs out of the
-stack, short of the exceptions below. It does not queue them: a deploy that
-finds it held retries three times at two-second intervals and then fails,
-naming the current holder when it can read the lock. An attempt that fails
-and then finds no lock at all means the holder released it in between, so
-the deploy tries again at once, up to three extra times, and otherwise waits
-like it would for a held lock.
-
-### What a second deploy started too early runs into
-
-**An update against a still-provisioning resource is likely to fail, and the
-failure rolls that deploy back.** cdkd does not wait for a resource to become
-available before updating it.
-
-Its per-operation retry covers throttling responses (HTTP 429 included),
-transient HTTP 500, 502, 503 and 504 answers, and AWS messages matching a fixed
-list of transient patterns. Nested stacks and Custom Resources sit outside that
-retry entirely and handle their own transient errors.
-
-The backoff budget is roughly 47 to 64 seconds for a single operation, and up to
-about ten minutes where a replacement path nests one retry loop inside another.
-A rejection in none of those classes, or one that outlasts the budget, fails the
-resource.
-
-[Rollback](rollback.md) then reverts what the *second* deploy had already done,
-while the first deploy's resources keep coming up in the background: it deletes
-what that deploy created and undoes its own updates. `DeletionPolicy` carves
-out what survives that delete, per the table under
-[`cdkd rollback`](cli-rollback.md#deletionpolicy-on-a-rolled-back-create), and
-one carve-out is not a policy at all: a resource the second deploy had already
-deleted cannot be brought back. `--no-rollback` leaves the whole partial deploy
-in place instead.
-
-**A second deploy whose template produces no diff updates nothing, so it avoids
-that rejection.** A resource the rollback above left in AWS is re-adopted before
-the diff runs — when the template still declares it with the same type and
-leaves the physical name for cdkd to derive — and the adoption produces no diff
-entry of its own, so such a deploy stays no-change. It still re-resolves the
-stack's Outputs, and an attribute the first deploy never produced does not read
-back as expected:
-
-- A public address a `--no-wait` EC2 instance had not been assigned when the
-  first deploy recorded it (`PublicIp` / `PublicDnsName`; the private address,
-  private DNS name and availability zone are assigned at launch and are
-  recorded whenever the read-back carries them) is absent from state rather
-  than recorded as an empty string, so
-  an Output over it re-reads the instance from AWS on the next resolution.
-  When the instance has the address by then, the Output and any
-  `Fn::ImportValue` consumer get the real value, cached for the rest of that
-  deploy. While it is still `pending`, cdkd **refuses** to resolve the
-  reference — the instance ID is never substituted for an address — and
-  nothing is cached, so the next deploy re-reads again. Where the reference
-  sits decides what that refusal does: in a resource property it fails that
-  resource; in an Output, cdkd warns and skips the Output (it fails the deploy
-  under `--strict-getatt`), and the next deploy re-resolves it. The same
-  refusal answers a `DescribeInstances` that fails, naming the error class
-  (`--verbose` shows the AWS text). This is only the not-yet-assigned case: a
-  running instance with no public address (a private subnet) resolves both to
-  the empty string, which is what CloudFormation reports for it. An RDS, DocDB
-  or Neptune `DBInstance` created under `--no-wait` likewise omits
-  `Endpoint.Address` / `Endpoint.Port` while the instance is still `creating`.
-  A later deploy that resolves a reference to them re-reads the instance once
-  and, when it is `available` by then, serves the real endpoint and records it
-  in state — a no-change deploy included. While the instance still has no
-  endpoint, the reference resolves to the instance identifier with a warning
-  (or fails under `--strict-getatt`), nothing is recorded, and the next deploy
-  re-reads again. See
-  ["Cannot resolve" a GetAtt on a resource an older cdkd deployed](troubleshooting.md#cannot-resolve-a-getatt-on-a-resource-an-older-cdkd-deployed).
-- An Output the resolver cannot resolve on the no-change deploy keeps its
-  previously persisted value while every sibling that did resolve is
-  persisted; cdkd warns naming the Output. Its literal export alias is kept
-  only if the previous deploy published it and the export-name check still
-  passes it: one equal to a `NoEcho` parameter's value, or containing one of 4
-  or more characters, is dropped with the same
-  warning a deploy gives. Two shapes keep the whole previous
-  bag instead: a failed Output whose `Export.Name` is itself an intrinsic, and
-  a merge that would put a secret expression beside a carried plain value.
-
-**The baseline it reads is only as complete as the first deploy's exit.** A
-deploy that succeeded wrote its final state, physical IDs included, before
-releasing the lock. A deploy that failed or was interrupted wrote what it could
-on a best-effort basis.
-
-### The lock does not guarantee exclusion
-
-It can change hands while its holder is still working. Three ways:
-
-- Renewals that fail long enough for the TTL to lapse leave the lock free for
-  another process to take.
-- [`cdkd force-unlock`](cli-force-unlock.md) removes one outright, live holder
-  included.
-- `cdkd state orphan --force` (without `--resource`) force-releases the
-  stack's lock the same way on its way to dropping the state record.
-
-A holder that notices warns and declines to delete a lock it no longer owns,
-but past that point two processes can be writing one stack's state.
-
-A lock can also outlive its command: a force-quit (a second Ctrl-C), a
-`SIGKILL`, or a release cdkd refuses because it cannot confirm the lock is
-still its own. Such a lock lapses on its own once its TTL passes with nobody
-renewing it, and `cdkd force-unlock` clears one immediately.
-
-## Why the defaults are where they are
-
-Where CloudFormation and Terraform agree on the completion definition, cdkd
-matches them. Where they disagree, the default takes the definition that suits
-dev/test iteration and `--full-wait` opts into the CloudFormation one.
-
-Even where both engines wait, cdkd's default may take the fast side — but only
-when all three of these hold:
-
-1. **No in-deploy consumer.** Nothing the same deploy creates or resolves
-   (`Fn::GetAtt`, downstream create calls, post-create verification) needs the
-   waited-for state.
-2. **No failure signal.** The wait cannot surface an error — a timeout means
-   slow, not broken — so waiting buys certainty of *when*, never *whether*.
-3. **Measurable in both modes.** The comparison tool offers both completion
-   definitions, so a benchmark can report two like-for-like rows instead of
-   redefining "done" to win one.
-
-`AWS::CloudFront::Distribution` is the only type admitted under that clause,
-and the same test is why a blanket "`--no-wait` by default" stays rejected:
-ACM fails (1) outright, RDS fails (1) because `Endpoint` attributes are not
-final until `available`, and EC2 fails (1) because the instance-profile
-verification needs a `running` instance.
-
-These are per-run choices, not capability limits. A pipeline that wants
-CloudFormation-parity completion semantics — a smoke-test gate, a
-production-leaning promotion step — can bake `--full-wait` into its deploy
-invocation as a standing setting.
-
-## A malformed `resources` map refuses the deploy
-
-A state record is used as typed data without a field-by-field shape check, so a
-hand-edited or truncated one can hold a string, a list, a number, a boolean or
-`null` where the `resources` map belongs.
-
-That map is what cdkd compares your template against to decide what already
-exists. A `[]`, a number or a boolean enumerates **no logical ids**, so every
-resource the template declares plans as a `CREATE` — cdkd re-provisions a stack
-that is already standing, colliding on every deterministic name and duplicating
-the rest — and then saves a well-formed record over the only signal anything
-was wrong. A string enumerates one fabricated logical id per character instead.
-
-`cdkd deploy` refuses such a record at the load
-(`STATE_RESOURCES_MALFORMED`, exit `1`). Nothing is provisioned and no state is
-written for that stack. `--dry-run` refuses too: the plan a dry run prints comes
-from the same comparison, so it would show the re-creation as though your
-template asked for it.
-
-Reading the map as empty is not a safe alternative — it produces that same plan
-— which is why cdkd does not offer one here. `cdkd diff` does repair it and warn,
-because it provisions nothing; that is where to go to see the rest of the stack.
-
-An **absent** `resources` field is a defect and is refused: a stack always has a
-resource map, even an empty one. An empty `{}` is healthy and deploys normally
-(it is what a first-ever deploy reads). Inspect the record with `cdkd state show
-'<stack>' --stack-region '<region>' --json`, repair or remove it, then re-run. Full
-table in
-[State Management](state-management.md#when-resources-is-not-an-object).
-
-## A malformed `outputs` map refuses the deploy
-
-A state record is used as typed data without a field-by-field shape check, so a
-hand-edited or truncated one can hold a string, a list, a number, a boolean or
-`null` where the `outputs` map belongs — and enumerating a string yields one
-entry per **character**.
-
-`cdkd deploy` refuses such a record at the load
-(`STATE_RESOURCES_MALFORMED`, exit `1`) rather than continuing. It rebuilds the
-bag before saving, so a six-character value would be written back as a
-well-formed six-key map: the only signal the record is damaged replaced by a
-legitimate-looking one, permanently — and the next deploy republishes those
-fabricated keys into the region's shared exports index, which every other
-stack's `Fn::ImportValue` resolves against.
-
-The same refusal covers a nested stack's **child** record, whose outputs the
-parent's `Outputs.<Key>` attributes are rebuilt from and persisted into the
-parent's own record.
-
-Inspect the record with `cdkd state show '<stack>' --stack-region '<region>'
---json`, repair or remove it, then re-run. An **absent** `outputs` field is not
-a defect and is never refused: cdkd writes such records on purpose. The full
-per-command table is in [State Management](state-management.md#when-outputs-is-not-an-object).
-
-## A malformed `orphans` list refuses the deploy
-
-A rollback that leaves a `DeletionPolicy: Retain` resource standing records it
-under `orphans`, so the next deploy can adopt that resource back instead of
-colliding with the name it still holds. The field is a LIST, and the same
-absence of a shape check lets a hand-edited or truncated record hold a string, a
-number, an object or `null` there instead.
-
-`cdkd deploy` refuses such a record after taking the lock and before any
-resource operation (`STATE_RESOURCES_MALFORMED`, exit `1`).
-
-Unguarded, every such shape is wrong in one of two ways. Either the deploy reads
-the record as having **no orphans at all** — and provisions against retained
-resources that are already in AWS, unadopted — or it dies in the adoption walk
-with a `TypeError` that names neither the field nor the stack, a string being
-walked one **character** per orphan record.
-
-Inspect the record with `cdkd state show '<stack>' --stack-region '<region>'
---json`, repair or remove it, then re-run. An **absent** `orphans` field is not a
-defect and is never refused — it is the ordinary shape for a stack that has
-never had a failed deploy.
-
-The same refusal covers a readable list holding a record no reader can use — one
-that is not an object, has no string `logicalId` or shares it with another
-record, or whose `state` is not a
-readable resource entry with a NON-EMPTY string `physicalId`, including that entry's
-`properties` and `attributes` maps. The adoption pass dereferences every record it walks,
-and keys what it adopts by `logicalId`, so of two records sharing one only one
-would be adopted.
-
-`cdkd diff` previews such a record rather than refusing it, and warns either
-way — but what it EXITS depends on the shape. A row it cannot preview at all (not
-an object, no string `logicalId`, no readable `state`, or a `state` with no non-empty string
-`physicalId`) is dropped, and so is every record sharing its `logicalId` with another,
-named in the warning and in `--fail`'s count, and exits `0` without `--fail`. A
-row it KEEPS — one whose `properties` or `attributes` map is not an object —
-additionally exits `3` on the top-level stack, because there the preview would
-otherwise show an adoption this deploy will not perform.
-
-The per-command tables are in State Management — one for
-[the container](state-management.md#when-orphans-is-not-a-list), one for
-[a single record](state-management.md#when-one-orphans-record-cannot-be-read).
-
-## A malformed resource `properties` map refuses the deploy
-
-Each resource record carries its own `properties` map — the resolved template
-values cdkd last sent — and it is unchecked in the same way. That one is what
-the change calculation compares your template against, so a non-object makes
-**every property the template declares read as missing from the deployed
-resource**. For a create-only property (an S3 `BucketName`, a DynamoDB
-`TableName`) that is a **replacement**: the live resource would be deleted and
-re-created from a record nobody asked cdkd to act on.
-
-`cdkd deploy` refuses such a record before creating, updating or deleting any
-resource (`STATE_RESOURCES_MALFORMED`, exit `1`), naming the resource records it
-could not read — up to five, then a count. Nothing is provisioned and no state
-is written for that stack.
-
-`--dry-run` refuses too, and for the same reason: the plan a dry run would print
-is built from the same comparison, so it would show the replacement as though it
-were what your template asked for.
-
-Reading the map as empty instead is not a safe alternative and cdkd does not
-offer one: an empty map declares nothing either, so it produces the identical
-replacement. Only a refusal avoids it. `cdkd diff` does repair those maps and
-warn, because it provisions nothing — its preview of such a record is wrong in
-exactly that direction, and its warning says so, which is where to go when you
-want to see the rest of the stack.
-
-An **absent** `properties` map is a defect and is refused; an empty `{}` is
-healthy, since a resource can legitimately declare no properties. Inspect the
-record with `cdkd state show '<stack>' --stack-region '<region>' --json`, repair or
-remove it, then re-run. Full table in
-[State Management](state-management.md#when-a-resource-properties-map-is-not-an-object).
-
-## An unreadable resource record refuses the deploy
-
-A resource record in the `resources` map can itself be damaged: `null`, a
-string or a number instead of an object, or an object with no `resourceType`.
-The change calculation looks each template resource up by its logical id, so a
-record that is not an object reads as **not in state**. The deploy would plan a
-`CREATE` for a resource that is already live. A named resource then fails on a
-name collision, and an unnamed one is created a second time with the first copy
-left unmanaged. A record with no `resourceType` would be planned as a type
-change, which replaces the live resource.
-
-`cdkd deploy` refuses such a record before creating, updating or deleting any
-resource (`STATE_RESOURCES_MALFORMED`, exit `1`), naming the records it could
-not read. `--dry-run` refuses too. `cdkd diff` drops those records, warns, and
-previews the rest of the stack. Inspect the record with `cdkd state show '<stack>'
---stack-region '<region>' --json`, repair or remove it, then re-run.
-
-The same refusal — and the map refusal above it — runs on the pre-lock
-`--recreate-via-cc-api` / `--recreate-via-sdk-provider` check, which reads the
-record itself before the engine does. Without it a `null` row named by either
-flag was reported as *missing from state*, with advice to drop the flag for a
-resource whose broken row was the reason it could not be recreated, and a row
-with no `resourceType` reached the confirmation prompt with no type to show.
-
-## A changed custom-resource ServiceToken
-
-A custom resource's `ServiceToken` cannot change in place. CloudFormation
-refuses the update (`Modifying service token is not allowed`), and so does
-`cdkd deploy`: sent as an `Update`, the change would reach only the NEW
-handler, and the old handler would never get a `Delete` for what it created.
-
-- A token the plan can compare (two different ARNs) is refused before anything
-  is provisioned, `--dry-run` included. No request reaches either handler and
-  state is unchanged.
-- A token that reads a resource the same deploy replaces or creates (a renamed
-  backing Lambda, or a switch to a new provider) is known only once that
-  resource exists. The update is refused then, before the handler is invoked,
-  and the deploy fails and rolls back like any other resource failure. Unlike
-  CloudFormation, which keeps a replaced resource until cleanup, cdkd has
-  already deleted a replaced backing Lambda by then, and the rollback
-  re-creates it from its record; if that re-creation fails or lands under
-  another name, the custom resource's record names a function that no longer
-  exists. A `Ref` / `Fn::GetAtt` whose ARN did not change is not a change.
-- Where the recorded token is missing, the redaction mask `***` or a
-  `{{resolve:...}}` reference, cdkd cannot compare it, so a deploy whose
-  template changes it (or the expression behind a masked one) is refused too.
-  If the handler did not change, put back as `ServiceToken` in `state.json` the
-  ARN of the handler that created this resource (the one it was last deployed
-  with, not the one the template names now) and re-deploy. Restoring the
-  template's new ARN would send the next update to the new handler, which is
-  the problem this refusal prevents.
-- A `ServiceToken` fed by a `NoEcho` parameter is recorded only as `***`, so a
-  new VALUE of that parameter is not detected: the deploy updates the custom
-  resource as before, through whichever handler the value names. Feed
-  `ServiceToken` from a plain value to have such a change refused.
-
-To move a custom resource to another handler, give it a new logical id (in
-CDK, a new construct id, or `overrideLogicalId` on its `CfnResource`). The
-deploy then creates the new resource through the new handler and deletes the
-old one through its old handler. No flag overrides the refusal; a
-`--recreate-via-cc-api` target is not refused, since it already deletes the
-old resource through the record's token and creates the new one through the
-template's.
-
-## A skipped custom-resource delete
-
-A deploy deletes a custom resource when it leaves the template, is replaced,
-or is rolled back (by the deploy itself or by `cdkd rollback`). That delete is
-skipped, as on `cdkd destroy`, when the handler answers `FAILED`, the invoke
-does not complete, or the recorded `ServiceToken` is the redaction mask `***`
-or a `{{resolve:...}}` reference.
-The remedy differs from destroy's, because the stack is still deployed:
-
-- **Removed from the template**: the record is kept and the deploy exits `2`.
-  The next `cdkd deploy` sends the `Delete` again, so fix the handler (or put
-  the provider's ARN back as `ServiceToken` in `state.json`) and re-deploy.
-  If the handler's Lambda function is gone by then, that deploy drops the
-  record with a warning; tear down what the handler manages by hand.
-  `--allow-unaddressed` lets a deploy exit `0` meanwhile (`cdkd rollback` has
-  no such flag).
-- **Replaced delete-first, or rolled back**: the resource usually fails and the
-  record is kept.
-- **Where the other copy already exists** (a replacement that created the new
-  resource first, or a rollback that re-created the old one first): the skip
-  only warns, and the surviving copy is no longer tracked; tear it down by hand.
-
-For a resource removed from the template, to give up on the delete and stop
-tracking it, drop only its record with `cdkd state orphan '<stack>' --stack-region <region> --resource <logicalId>`
-([one resource's record](cli-state.md#removing-one-resource-from-the-record)).
-Do not run `cdkd state orphan '<stack>'` without `--resource` to clear it. That
-drops the record of every resource in the stack, so the next deploy re-creates
-or collides with all of them; the whole-stack form is the remedy only on
-[`cdkd destroy`](cli-destroy.md), where the stack's other records are already
-gone.
-
-A `ServiceToken` that is not a string (a leaked intrinsic) is different. A
-create or update reads it from the template, and a rollback replays the
-recorded value, so fix the template and re-deploy; do not drop the record, with
-or without `--resource`, because the template still declares the resource and
-the next deploy would send the handler a fresh Create. A delete reads the state
-record: restore the ARN in `state.json`, or, for a resource removed from the
-template, drop only its record with `--resource` as above.
-
-## The same stack name under another state prefix refuses the deploy
-
-A stack name is one deployment per account and region, as in CloudFormation —
-see [One stack name per account and region](state-store.md#one-stack-name-per-account-and-region)
-for why, what the checks cannot see, the permissions they use, and the remedies
-the refusals print. A deploy enforces it twice:
-
-- **A create never takes over a resource it cannot account for.** Before
-  creating a queue, topic, log group, alarm, EventBridge rule, S3 bucket, ECS
-  cluster, load balancer, target group or state machine under a name cdkd
-  generated, the deploy looks the name up. An existing holder that this
-  stack's state, rollback journal, create-token ledger, `retained.json` or
-  (for what an older cdkd kept) its own history does not name refuses that
-  create (`GENERATED_NAME_HELD`), as CloudFormation refuses a name that
-  already exists; that resource is not created. This holds whatever backend
-  the other deployment uses — another prefix, bucket or account's bucket. The
-  lookups are exact reads by name, all started once the plan is known, so a
-  first deploy pays about one round trip; a redeploy that creates nothing
-  looks nothing up. A lookup refused with 403 warns and creates; any other
-  lookup failure refuses that create.
-- **The stack registry.** A first deploy claims the bucket's marker
-  `_cdkd-registry/<region>/<stack>.json` for this prefix before its first
-  provider call, and refuses when the marker names another prefix that holds
-  the stack. A stack the prefix already records reads the marker only when its
-  plan deletes, replaces or may replace a resource, or adds or updates a nested
-  stack, before the `--require-approval` prompt; an ordinary redeploy makes no
-  registry request. A replacement the deploy finds only on reading a resource
-  back is checked then, and a refusal keeps that resource and exits `2`. A
-  failed deploy's automatic rollback, a nested stack's included, keeps, rather
-  than deletes, a created resource when another prefix holds the stack or the
-  check fails. If S3 denies the marker, the deploy warns and falls back to
-  listing the bucket's prefixes.
+| `AWS::EC2::Instance` | Return while `pending` | Wait for `running` (30-60 s) | same as default | Waits | Waits |
+| `AWS::ElasticLoadBalancingV2::LoadBalancer` | Return while `provisioning` | Wait for `active` (90-180 s) | same as default | Waits | Waits |
+| `AWS::Lambda::MicrovmImage` | Return while `CREATING` | Wait for `CREATED` | same as default | Waits | n/a |
+
+[Deploy: wait mode details](cli-deploy-waits.md) explains what each early
+return leaves unfinished, and what `--full-wait` does when a wait runs out.
+
+### Edge cases
+
+- **Types that are not in the table can still wait.** A DynamoDB table, an EFS
+  file system and an EMR cluster, among others, wait for their own readiness
+  on create in every mode, because cdkd needs the result.
+- **CloudFront and `AWS::Lambda::MicrovmImage` through Cloud Control.** cdkd
+  provisions common resource types by calling the service's own API, and the
+  rest through the AWS Cloud Control API. The early return in the table
+  applies only to the first route. A resource of either type that is routed
+  through Cloud Control waits for its final state whatever the flag.
+
+## The same stack name under another state prefix
+
+A stack name is one deployment per account and region, as in CloudFormation.
+A deploy enforces that in two places, and refuses when a check fails:
+
+- **Before a create under a generated name.** For a queue, topic, log group,
+  alarm, EventBridge rule, S3 bucket, ECS cluster, load balancer, target
+  group or state machine, the deploy looks the name up first. If a resource
+  holds the name and nothing this stack records names it, that create is
+  refused with `GENERATED_NAME_HELD`. See
+  [Name check before a create](state-store-name-check.md).
+- **Against the stack registry.** A first deploy claims the stack's marker in
+  the state bucket, and refuses when the marker names another prefix. A later
+  deploy reads the marker only when its plan deletes or replaces a resource,
+  or adds or updates a nested stack. See
+  [Stack registry](state-store-registry.md).
+
+An ordinary redeploy pays for neither check: it looks no name up and makes no
+registry request.
+
+When the deploy fails, its automatic rollback keeps a resource it created,
+and does not delete it, if another prefix holds the stack or the check cannot
+run. [One stack name per account and region](state-store.md#one-stack-name-per-account-and-region)
+explains why.
+
+## In this section
+
+- [Deploy: wait mode details](cli-deploy-waits.md): what `--no-wait` leaves
+  unfinished for each resource type, what `--full-wait` adds, and the waits a
+  destroy always performs.
+- [Deploy: the stack lock](cli-deploy-lock.md): what the lock covers, why a
+  second deploy can start while resources are still coming up, and what that
+  deploy runs into.
+- [Deploy: a damaged state record](cli-deploy-damaged-state.md): why a deploy
+  refuses with `STATE_RESOURCES_MALFORMED`, and how to recover.
+- [Deploy: custom resources](cli-deploy-custom-resources.md): a changed
+  `ServiceToken`, and a custom-resource delete that cdkd skipped.
+- [Deploy: tuning](cli-deploy-tuning.md): timeouts, resource names, the drift
+  baseline and CDK annotations.
+- [Deploy: safety & compatibility flags](cli-deploy-safety.md): replacements
+  and the guards around them.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Every resource was deployed. |
-| `1` | Hard error — bad arguments (including `--no-wait` together with `--full-wait`), auth failure, a synth crash, or a resource failure that the automatic rollback then handled. |
-| `2` | Resources were left unaddressed: a skipped DELETE, a replacement whose predecessor survives, or a replacement refused because another state prefix records the stack or the check could not run. State is preserved; re-running usually clears it. `--allow-unaddressed` restores `0`. |
+| `1` | The deploy failed. |
+| `2` | The stack deployed, but resources were left unaddressed. |
 
-An ECS service that never stabilizes under `--full-wait` fails the deploy, so it
-exits non-zero rather than `2`. A CloudFront wait that runs out does not fail
-the deploy at all. The full cross-command table is in the
-[CLI Reference](cli-reference.md#exit-codes).
+Exit `1` covers bad arguments (including `--no-wait` with `--full-wait`), an
+auth failure, a synthesis crash, a refused state record, and a resource
+failure that the automatic rollback then handled.
+
+Exit `2` means a delete was skipped, a replacement's old resource survives,
+or a replacement was refused because another state prefix records the stack
+(or that check could not run). cdkd keeps the state, and running the deploy again usually clears
+the code. `--allow-unaddressed` turns this exit into `0`.
+
+Under `--full-wait`, an ECS service that never stabilizes fails the deploy, so
+the deploy exits with a failure code and not with `2`. A CloudFront wait that runs out does not
+fail the deploy. [Exit codes](cli-reference-exit-codes.md) has the table for
+every command.
 
 ## Related
 
-- [Wait Modes](wait-modes.md) — the same axis, summarised for a first read
-- [Deploy: tuning](cli-deploy-tuning.md) — timeouts, name prefixing, observed-state capture
-- [Deploy: safety & compatibility flags](cli-deploy-safety.md) — the guards and their escape hatches
-- [Benchmarks](benchmarks.md) — what the wait modes cost in wall-clock time
-- [State Management](state-management.md) — the stack lock's layout, TTL and renewal
-- [Rollback](rollback.md) — what the automatic rollback reverts when a deploy fails
+- [Wait Modes](wait-modes.md): the same choice, summarized for a first read
+- [Rollback](rollback.md): what the automatic rollback reverts when a deploy fails
+- [State Management](state-management.md): the lock's layout, TTL and renewal
+- [Benchmarks](benchmarks.md): what the wait modes cost in wall-clock time

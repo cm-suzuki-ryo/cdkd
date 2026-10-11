@@ -1,27 +1,117 @@
 ---
 title: Introduction
-description: What cdkd is for, how it complements the AWS CDK CLI, and how much faster it is — benchmarked against CloudFormation, Express mode, and Terraform.
+description: What cdkd is, when to use it next to the AWS CDK CLI, and where to go in these docs for what you want to do.
 ---
 
 # Introduction
 
-cdkd is a drop-in CDK CLI for existing CDK apps — up to 15x faster deploys via direct AWS SDK calls instead of CloudFormation.
+cdkd is a command-line tool that deploys your existing CDK app by calling AWS
+APIs directly, without going through CloudFormation. Deploys are up to 15x
+faster, and your CDK code does not change. You run `cdkd deploy` where you ran
+`cdk deploy`:
 
-- **Drop-in CDK compatible**: your existing CDK app code runs as-is; just replace `cdk deploy` with `cdkd deploy`.
-- **Up to 15x faster deploys**: direct SDK calls, aggressive parallelization, and `--no-wait` to skip slow stabilization waits; **faster than Terraform and CloudFormation Express mode** too (see [Benchmarks](benchmarks.md)).
+```bash
+npm i -g @go-to-k/cdkd
+cdkd bootstrap        # once per AWS account
+cdkd deploy MyStack   # from the directory that holds your cdk.json
+```
 
 ![cdk deploy vs cdkd deploy](https://raw.githubusercontent.com/go-to-k/cdkd/main/assets/cdk-vs-cdkd.gif)
 
-**cdkd complements the AWS CDK CLI rather than replacing it.** Use cdkd in dev/test for rapid iteration; use the AWS CDK CLI in production for full CloudFormation tooling. Install cdkd alongside an existing `cdk deploy` workflow: no migration needed. You can also [import](import.md) existing stacks into cdkd or [export](export.md) back to CloudFormation anytime.
+## Where the speed comes from
 
-**A natural fit for AI-driven development.** AI coding agents iterate in tight spin-up / tear-down loops — and cdkd keeps each turn short, with fast deploys and an equally fast `cdkd destroy` that deletes via direct SDK calls instead of polling a CloudFormation stack-delete. See [Using cdkd with AI coding agents](ai-agents.md).
+`cdk deploy` turns your CDK code into a CloudFormation template, hands the
+template to the CloudFormation service, and waits while the service works
+through it. cdkd produces the same template and then does the work itself:
 
-**Local execution from your deployed stack.** `cdkd local` runs your functions, APIs, and ECS tasks on your machine. It can resolve env vars, secrets, and resource references from your real deployed stack: no hand-written `.env` files, no hand-seeded test data (see [Local execution](local-emulation.md)).
+- It creates each resource by calling that service's API directly.
+- It runs resources in parallel, and starts each one as soon as the resources
+  it depends on are done.
+- With `--no-wait`, it returns once AWS has accepted each create call. Slow
+  resources such as CloudFront distributions and RDS instances then finish in
+  the background.
 
-> **IMPORTANT**: cdkd is for dev/test workflows only — early in development, not yet production-ready.
+`cdkd destroy` is fast for the same reasons. The [Benchmarks](benchmarks.md)
+compare cdkd with CloudFormation, CloudFormation Express mode and Terraform.
 
-## Next steps
+## When to use it
 
-- [Getting Started](getting-started.md) — install cdkd and run your first deploy
-- [Benchmarks](benchmarks.md) — vs CloudFormation, Express mode, and Terraform
-- [Core Concepts](concepts.md) — how cdkd works under the hood
+Use cdkd where you deploy often and want each deploy to be short: your own dev
+stacks, test environments, per-pull-request environments in CI, and the
+deploy-and-tear-down loops of AI coding agents.
+
+Keep using the AWS CDK CLI for production, because CloudFormation gives
+production deploys change sets, stack policies and the rest of its tooling.
+The two tools work side by side: one CDK app can be deployed by cdkd to a dev
+environment and by the AWS CDK CLI to production.
+
+You can also move a stack from one tool to the other at any time.
+[Importing Existing Resources](import.md) brings a CloudFormation stack under
+cdkd, and [Exporting to CloudFormation](export.md) hands a cdkd stack back.
+
+> [!IMPORTANT]
+> cdkd is for dev and test workflows only. It is early in development and not
+> yet production-ready.
+
+## What else it does
+
+cdkd also covers the work around a deploy:
+
+- **Local execution.** `cdkd local` runs your Lambda functions, APIs and ECS
+  tasks on your machine. It can take environment variables, secrets and
+  resource references from the deployed stack, so you do not write a `.env`
+  file by hand. See [Local Execution](local-emulation.md).
+- **Rollback.** When a deploy fails, cdkd undoes what that deploy did. See
+  [Rollback](rollback.md).
+- **Drift detection.** `cdkd drift` reports resources that were changed in AWS
+  outside cdkd. See [Drift Detection](drift.md).
+- **Deployment history.** `cdkd events` shows what each past deploy did. See
+  [Deployment Events](deployment-events.md).
+
+## Find your way
+
+::: card-grid
+
+::: card Try it on your CDK app
+Install, bootstrap, deploy, tear down. [Getting Started](getting-started.md)
+:::
+
+::: card Understand what a deploy does
+The pipeline, state, and how changes are decided.
+[Core Concepts](concepts.md)
+:::
+
+::: card Make deploys faster
+What `--no-wait` skips and when it is safe. [Wait Modes](wait-modes.md)
+:::
+
+::: card Recover from a failed deploy
+What is undone and what you run. [Rollback](rollback.md), and
+[Troubleshooting](troubleshooting.md) for a specific error.
+:::
+
+::: card Use cdkd next to CloudFormation
+One app, two tools. [Mixed Estates](mixed-estates.md),
+[Importing Existing Resources](import.md),
+[Exporting to CloudFormation](export.md)
+:::
+
+::: card Give every pull request an environment
+Deploy on open, destroy on close. [Per-PR Environments in CI](ci-per-pr.md)
+:::
+
+::: card Run your app locally
+Functions, APIs and tasks on your machine.
+[Local Execution](local-emulation.md)
+:::
+
+::: card Work with an AI coding agent
+Install the cdkd skill. [Use with AI Coding Agents](ai-agents.md)
+:::
+
+::: card Look something up
+Every command and flag in the [CLI Reference](cli-reference.md); which
+resource types work in [Supported Resources](supported-resources.md).
+:::
+
+:::

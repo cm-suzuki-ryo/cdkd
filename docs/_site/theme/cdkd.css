@@ -289,6 +289,33 @@ body {
       }
     }
 
+  }
+
+  /* A page with pages under it: its title is the link to the page, and the
+     chevron at the end of the row folds the pages under it. */
+  & .nav-details > .nav-summary {
+    align-items: center;
+    justify-content: space-between;
+    border-radius: var(--cdkd-radius-sm);
+
+    & > .nav-link {
+      flex: 1;
+      min-inline-size: 0;
+    }
+
+    &::before {
+      order: 1;
+      flex: none;
+      margin: 0 0.6875rem 0 var(--cdkd-space-2);
+      inline-size: 0.3125rem;
+      block-size: 0.3125rem;
+      border-width: 0 1.5px 1.5px 0;
+      color: var(--cdkd-color-text-muted);
+      transition: transform var(--cdkd-motion-normal) var(--cdkd-motion-ease);
+    }
+  }
+
+  & :is(.nav-section--collapsible, .nav-details) {
     &::details-content {
       block-size: 0;
       overflow: clip;
@@ -931,6 +958,130 @@ body {
 
   & .search-result:is(.selected, :hover) {
     background: var(--cdkd-color-selected);
+  }
+
+  /* The scope a result came from, beside its title. */
+  & .search-result-scope {
+    margin-inline-start: var(--cdkd-space-2);
+    color: var(--cdkd-color-text-muted);
+    font-family: var(--cdkd-font-mono);
+    font-size: var(--cdkd-type-caption-size);
+    font-weight: 400;
+  }
+}
+
+/* One button per search scope, under the input (plugins/search-scopes.ts). */
+.cdkd-search-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cdkd-space-2);
+  padding: var(--cdkd-space-2) var(--cdkd-space-4);
+  border-block-end: 1px solid var(--cdkd-color-border-subtle);
+}
+
+.cdkd-search-scope {
+  padding: var(--cdkd-space-1) var(--cdkd-space-2);
+  border: 1px solid var(--cdkd-color-border-subtle);
+  border-radius: var(--cdkd-radius-sm);
+  background: transparent;
+  color: var(--cdkd-color-text-secondary);
+  font-family: var(--cdkd-font-mono);
+  font-size: var(--cdkd-type-caption-size);
+  cursor: pointer;
+  transition:
+    background var(--cdkd-motion-fast) var(--cdkd-motion-ease),
+    color var(--cdkd-motion-fast) var(--cdkd-motion-ease);
+
+  &:hover {
+    background: var(--cdkd-color-surface-alt);
+    color: var(--cdkd-color-text);
+  }
+
+  &[aria-pressed='true'] {
+    border-color: var(--cdkd-color-border);
+    background: var(--cdkd-color-selected);
+    color: var(--cdkd-color-text);
+  }
+
+  &:focus-visible {
+    outline: var(--cdkd-border-focus-width) solid var(--cdkd-color-focus);
+    outline-offset: 1px;
+  }
+}
+
+/* -- Line breaks ---------------------------------------------------------------- */
+
+/* A heading breaks into lines of like length, never one word on its own; body
+   text avoids a short last line. Both fall back to the browser's default. */
+.content :is(h1, h2, h3, h4, h5),
+.content .ox-card-title,
+.sidebar .nav-link,
+.toc .toc-link {
+  text-wrap: balance;
+}
+
+.content :is(p, li, dd, blockquote, td, figcaption) {
+  text-wrap: pretty;
+}
+
+/* Quoted output wraps where it would scroll (set by the theme script). */
+.content pre.cdkd-pre-wrap,
+.content pre.cdkd-pre-wrap code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* -- Steps and cards ---------------------------------------------------------- */
+
+/* `::: steps`: core draws the numbers and the rail; a step's first line is
+   its title. */
+.content .ox-steps {
+  padding-inline: var(--cdkd-space-4);
+}
+
+.content .ox-steps__item {
+  &::before {
+    border: 1px solid var(--cdkd-color-border);
+    background: var(--cdkd-color-bg);
+    color: var(--cdkd-color-text);
+    font-weight: var(--cdkd-weight-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+
+  & > :first-child {
+    font-weight: var(--cdkd-weight-semibold);
+  }
+}
+
+/* `::: card-grid` of `::: card`: where a hub page sends its reader next. */
+.content .ox-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: var(--cdkd-space-3);
+  margin: var(--cdkd-space-6) 0;
+}
+
+.content .ox-card {
+  padding: var(--cdkd-space-4);
+  border: 1px solid var(--cdkd-color-border-subtle);
+  border-radius: var(--cdkd-radius-md);
+  background: var(--cdkd-color-surface);
+
+  & .ox-card-title {
+    margin: 0 0 var(--cdkd-space-2);
+    color: var(--cdkd-color-text);
+    font-weight: var(--cdkd-weight-semibold);
+  }
+
+  & > :not(.ox-card-title) {
+    margin: 0;
+    color: var(--cdkd-color-text-secondary);
+    font-size: var(--cdkd-type-small-size);
+    line-height: var(--cdkd-type-small-leading);
+  }
+
+  & > :not(.ox-card-title) + :not(.ox-card-title) {
+    margin-block-start: var(--cdkd-space-2);
   }
 }
 

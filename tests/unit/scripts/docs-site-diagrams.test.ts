@@ -116,6 +116,91 @@ describe('layout', () => {
     expect(() => layout({ ...tiny, rows: [['a'], ['c']] }, 'wide')).toThrow(/no node "c"/);
   });
 
+  // A decision: two arrows leave one box, each with a label beside it.
+  const fork: Diagram = {
+    id: 'fork',
+    title: 'Fork',
+    description: 'One box, then two, and a way back.',
+    rows: [['ask'], ['left', 'right']],
+    edges: [
+      { from: 'ask', to: 'left', label: 'the answer on the left, which runs on for longer than one line holds' },
+      { from: 'ask', to: 'right', label: 'held by another run' },
+    ],
+    loops: [{ from: 'right', to: 'ask', label: 'try again' }],
+    nodes: [
+      { id: 'ask', title: 'Ask' },
+      { id: 'left', title: 'Left' },
+      { id: 'right', title: 'Right' },
+    ],
+  };
+  const labelsOf = (svg: string) =>
+    [...svg.matchAll(/<text class="d-label" x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]*)</g)].map(
+      (match) => ({ x: Number(match[1]), y: Number(match[2]), text: match[3]! }),
+    );
+  // `M x1 y1 V yTurn H x2 V y2`: where an arrow to another column turns.
+  const turnsOf = (svg: string) =>
+    [...svg.matchAll(/<path class="d-edge" d="M[\d.]+ [\d.]+V([\d.]+)H([\d.]+)V[\d.]+"/g)].map(
+      (match) => ({ y: Number(match[1]), x: Number(match[2]) }),
+    );
+
+  it.each(VARIANTS)('turns an arrow above the labels of the row it enters (%s)', (variant) => {
+    const svg = renderSvg(fork, variant);
+    const turns = turnsOf(svg);
+    expect(turns).toHaveLength(2);
+    const arriving = labelsOf(svg).filter((label) => label.text !== 'try again');
+    expect(arriving.length).toBeGreaterThanOrEqual(2);
+    // A label's cap height is under 12 units above its baseline.
+    for (const label of arriving) {
+      for (const turn of turns) expect(label.y - 12).toBeGreaterThan(turn.y);
+    }
+  });
+
+  it.each(VARIANTS)('keeps a label left of the next arrow into the row (%s)', (variant) => {
+    const svg = renderSvg(fork, variant);
+    const [left, right] = turnsOf(svg).sort((a, b) => a.x - b.x);
+    const beside = labelsOf(svg).filter((label) => label.x > left!.x && label.x < right!.x);
+    // The long label wraps, where one line would have run under the arrow.
+    expect(beside.length).toBeGreaterThan(1);
+    // 6.3 units a character is the layout's own estimate for a label.
+    for (const label of beside) expect(label.x + label.text.length * 6.3).toBeLessThan(right!.x);
+  });
+
+  // A tree two rows deep: the root points at every box, the last row too.
+  const tree: Diagram = {
+    id: 'tree',
+    title: 'Tree',
+    description: 'A root and five boxes in two rows under it.',
+    rows: [['root'], ['a', 'b'], ['c', 'd', 'e']],
+    edges: ['a', 'b', 'c', 'd', 'e'].map((to) => ({ from: 'root', to })),
+    nodes: ['root', 'a', 'b', 'c', 'd', 'e'].map((id) => ({ id, title: id })),
+  };
+
+  it.each(VARIANTS)('passes an arrow between the boxes of a row it skips (%s)', (variant) => {
+    const { boxes } = layout(tree, variant);
+    const skipped = [boxes.get('a')!, boxes.get('b')!];
+    const paths = [...renderSvg(tree, variant).matchAll(/<path class="d-edge" d="([^"]+)"/g)].map(
+      (match) => match[1]!,
+    );
+    expect(paths).toHaveLength(5);
+    for (const d of paths) {
+      // Walk the path's vertical runs: `M x y`, then `V y` and `H x` in turn.
+      let [x, y] = d.slice(1).split(/[VH]/)[0]!.split(' ').map(Number) as [number, number];
+      for (const [, command, value] of d.matchAll(/([VH])([\d.]+)/g)) {
+        if (command === 'H') {
+          x = Number(value);
+          continue;
+        }
+        const [top, bottom] = [Math.min(y, Number(value)), Math.max(y, Number(value))];
+        for (const box of skipped) {
+          const insideColumn = x > box.x && x < box.x + box.w;
+          const throughRow = top < box.y && bottom > box.y + box.h;
+          expect(insideColumn && throughRow).toBe(false);
+        }
+        y = Number(value);
+      }
+    }
+  });
+
   it('draws the narrow and the wide drawing in one figure', () => {
     const figure = renderFigure(tiny);
     expect(figure).toMatch(/^<figure class="cdkd-diagram"><svg [^>]*cdkd-diagram__svg--wide/);

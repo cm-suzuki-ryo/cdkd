@@ -112,7 +112,7 @@ version of the same collision — a plain output in one stack shadowing an
 export of the same name in another — is closed by schema v9's
 `exportNames`, which narrows what the index derives from the bag to the
 aliases the producer actually declared; see the v9 section in
-[State Management](state-management.md#version-9-adds-exportnames).) Rename the export (or
+[State Management](state-management-schema-versions.md#exportnames-which-outputs-are-exports).) Rename the export (or
 the colliding output) and redeploy the producer — there is no
 configuration that restores the old behavior, and the old behavior was
 order-dependent anyway.
@@ -497,7 +497,7 @@ exists:
 
 The values themselves are still delivered to AWS in the clear on the runs that
 succeed; only what cdkd writes down changes. See
-[State Management](state-management.md#noecho-custom-resource-responses).
+[State Management](state-management-secrets.md#custom-resource-responses-marked-noecho).
 
 ### `Fn::GetStackOutput` does NOT recordImport — it records to a separate bag
 
@@ -787,6 +787,72 @@ everything else, the unverifiable read is counted, and the run exits `2`
 rather than reporting the stack clean. Refusing the whole stack there would
 strand the consumer's own plaintext over a record its owner may not be able to
 repair.
+
+---
+
+## CloudFormation fallback
+
+What a user sees of the fallback is in [Mixed Estates](mixed-estates.md).
+The design points behind it:
+
+- **`Fn::ImportValue`**: when the export is in no cdkd state record, the
+  resolver falls back to CloudFormation `ListExports` (paginated) in the
+  consumer's region. CloudFormation's own semantic for `Fn::ImportValue` is
+  `ListExports`.
+- **`Fn::GetStackOutput`** (same-account only): when the producer has no
+  cdkd state record at `cdkd/{StackName}/{Region}/state.json`, the resolver
+  falls back to CloudFormation `DescribeStacks` and reads the stack's
+  `Outputs` in the target region. The `RoleArn` path never takes the
+  fallback.
+- **cdkd-first precedence is inherent.** The fallback only runs after a
+  cdkd-state miss, so a name collision between a cdkd export and a
+  CloudFormation export resolves to the cdkd one.
+- **CloudFormation-sourced resolutions are weak references.** They are not
+  recorded into `state.imports` / `state.outputReads`, and no state schema
+  change is involved.
+- **Graceful degradation.** A fallback lookup failure (most commonly a
+  caller lacking `cloudformation:ListExports` /
+  `cloudformation:DescribeStacks`) logs a warning and surfaces the original
+  not-found error.
+- **`--no-cfn-fallback`** (on `deploy` and `diff`) disables the fallback. The
+  diff resolvers honor the same flag so preview and apply resolve
+  identically.
+- The fallback relaxes the `cdkd export` leaf-first ordering constraint:
+  after a producer is exported to CloudFormation, remaining cdkd consumers
+  resolve its outputs through it.
+
+---
+
+## Strong-reference scan at destroy
+
+`cdkd destroy '<producer>'` refuses with `StackHasActiveImportsError` when a
+consumer still imports from the producer. The check is `scanActiveConsumers`
+in [`src/cli/commands/destroy-runner.ts`](https://github.com/go-to-k/cdkd/blob/main/src/cli/commands/destroy-runner.ts):
+
+1. It only runs when the producing stack's `state.outputs` is non-empty. A
+   stack with no outputs skips the scan.
+2. `stateBackend.listStacks()` enumerates every stack in the bucket.
+3. `getState` runs in parallel for each, excluding the producer itself.
+4. Each consumer's `imports[]` is filtered for entries matching
+   `(sourceStack=producerStack, sourceRegion=producerRegion)`.
+5. Any match throws `StackHasActiveImportsError` with the full consumer list.
+
+The scan is not delegated to the exports index. The index does not store the
+consumer-side reverse mapping (a `ListImports` equivalent), and trusting a
+stale index here could let a destructive destroy through. Destroy is not the
+performance-critical path, so the O(N) scan is accepted.
+
+CloudFormation offers no force flag for this refusal and cdkd matches that.
+A producer that must be destroyable independently uses `Fn::GetStackOutput`
+at template-authoring time.
+
+## Source map
+
+- Schema: [`src/types/state.ts`](https://github.com/go-to-k/cdkd/blob/main/src/types/state.ts)
+- Index store: [`src/state/export-index-store.ts`](https://github.com/go-to-k/cdkd/blob/main/src/state/export-index-store.ts)
+- Resolver: [`src/deployment/intrinsic-function-resolver.ts`](https://github.com/go-to-k/cdkd/blob/main/src/deployment/intrinsic-function-resolver.ts); `Fn::ImportValue` in [`src/deployment/intrinsic-resolver/cross-stack.ts`](https://github.com/go-to-k/cdkd/blob/main/src/deployment/intrinsic-resolver/cross-stack.ts), `Fn::GetStackOutput` in [`stack-output.ts`](https://github.com/go-to-k/cdkd/blob/main/src/deployment/intrinsic-resolver/stack-output.ts), the CloudFormation fallback in [`cfn-fallback.ts`](https://github.com/go-to-k/cdkd/blob/main/src/deployment/intrinsic-resolver/cfn-fallback.ts)
+- Destroy scan: [`src/cli/commands/destroy-runner.ts`](https://github.com/go-to-k/cdkd/blob/main/src/cli/commands/destroy-runner.ts)
+- Error class: [`src/utils/error-handler.ts`](https://github.com/go-to-k/cdkd/blob/main/src/utils/error-handler.ts)
 
 ---
 

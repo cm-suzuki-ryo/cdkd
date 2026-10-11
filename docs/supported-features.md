@@ -1,42 +1,79 @@
 ---
 title: Supported Features
-description: "CloudFormation feature parity in cdkd — which intrinsic functions, pseudo parameters, and template features are supported today."
+description: "Which CloudFormation template features cdkd supports: intrinsic functions, pseudo parameters, policies and custom resources, and the one it ignores."
 ---
 
 # Supported Features
 
-CloudFormation feature parity for cdkd. For per-resource-type provisioning
-support (SDK Providers vs Cloud Control API fallback), see
-[Supported Resources](supported-resources.md). For `cdkd local invoke`
-runtime and handler support, see
-[`cdkd local invoke`](local-invoke.md#runtimes-and-images).
+cdkd deploys the CloudFormation template that your CDK app produces. Whether
+your app works with cdkd therefore depends on which template features cdkd
+understands. This page lists them, and starts with the few that behave
+differently from CloudFormation.
+
+Two related lists are on other pages. [Supported Resources](supported-resources.md)
+has the resource types cdkd can deploy, and
+[`cdkd local invoke`](local-invoke.md) has the Lambda runtimes it runs
+locally.
+
+## What behaves differently from CloudFormation
+
+| Feature | Status | What cdkd does |
+| --- | --- | --- |
+| `UpdatePolicy` | ⚠️ Ignored | Applies the update directly, in one step |
+| A resource type with no SDK provider and no Cloud Control support | Not supported | Fails the deploy with an error naming the type |
+
+### `UpdatePolicy` is ignored
+
+cdkd does not process `UpdatePolicy`, which covers
+`CodeDeployLambdaAliasUpdate` and the Auto Scaling rolling-update policies.
+It applies the update in one step instead.
+
+For example, a Lambda alias with a CodeDeploy update policy switches to the
+new version at once. CloudFormation would shift traffic to it gradually
+through CodeDeploy. cdkd skips this on purpose, to keep dev and test deploys
+fast. The CodeDeploy application and deployment group resources themselves
+deploy normally.
+
+### Waiting for slow resources
+
+cdkd's default waits for less than CloudFormation does, and two flags change
+that. See [Wait Modes](wait-modes.md).
 
 ## Intrinsic Functions
 
 | Function | Status | Notes |
-|----------|--------|-------|
-| `Ref` | ✅ | Resource physical IDs, Parameters, Pseudo parameters |
+| --- | --- | --- |
+| `Ref` | ✅ | Resource physical IDs, parameters, pseudo parameters |
 | `Fn::GetAtt` | ✅ | Resource attributes (ARN, DomainName, etc.) |
 | `Fn::Join` | ✅ | String concatenation |
 | `Fn::Sub` | ✅ | Template string substitution |
 | `Fn::Select` | ✅ | Array index selection |
-| `Fn::Split` | ✅ | String splitting. A non-string value is refused, matching CloudFormation — in particular a list-valued `Fn::GetAtt` (`AWS::Route53::HostedZone.NameServers`, `AWS::EC2::VPC.Ipv6CidrBlocks`) is already a list, so drop the `Fn::Split` and use the `Fn::GetAtt` directly |
+| `Fn::Split` | ✅ | String splitting; a non-string value is refused, as in CloudFormation |
 | `Fn::If` | ✅ | Conditional values |
 | `Fn::Equals` | ✅ | Equality comparison |
 | `Fn::And` | ✅ | Logical AND (2-10 conditions) |
 | `Fn::Or` | ✅ | Logical OR (2-10 conditions) |
 | `Fn::Not` | ✅ | Logical NOT |
-| `Fn::ImportValue` | ✅ | Cross-stack references via S3 state, falling back to CloudFormation `ListExports` on a cdkd-state miss so CloudFormation-managed producers can be referenced; disable with `--no-cfn-fallback` |
-| `Fn::GetStackOutput` | ✅ | Cross-stack / cross-region output reference via S3 state, falling back to CloudFormation `DescribeStacks` outputs on a cdkd-state miss (same-account). Cross-account via `RoleArn` (reads the producer account's cdkd state; no CFn fallback). |
+| `Fn::ImportValue` | ✅ | Strong cross-stack reference, resolved from cdkd state, then CloudFormation exports |
+| `Fn::GetStackOutput` | ✅ | Weak cross-stack, cross-region or cross-account reference |
 | `Fn::FindInMap` | ✅ | Mapping lookup |
 | `Fn::GetAZs` | ✅ | Availability Zone list |
 | `Fn::Base64` | ✅ | Base64 encoding |
 | `Fn::Cidr` | ✅ | CIDR address block generation |
 
+`Fn::Split` refuses an attribute whose value is already a list. Two such
+attributes are `NameServers` of `AWS::Route53::HostedZone` and
+`Ipv6CidrBlocks` of `AWS::EC2::VPC`. Remove the `Fn::Split` and use the
+`Fn::GetAtt` directly.
+
+[Cross-Stack References](cross-stack-references.md) explains
+`Fn::ImportValue` and `Fn::GetStackOutput`, including how they read from
+CloudFormation-managed stacks.
+
 ## Pseudo Parameters
 
 | Parameter | Status |
-|-----------|--------|
+| --- | --- |
 | `AWS::Region` | ✅ |
 | `AWS::AccountId` | ✅ (via STS) |
 | `AWS::Partition` | ✅ |
@@ -47,51 +84,78 @@ runtime and handler support, see
 
 ## Resource Provisioning
 
-cdkd ships **90+ dedicated SDK Providers** (direct AWS SDK calls, no
-polling overhead) covering the most-used services — IAM, Lambda, S3,
-DynamoDB, EC2, RDS, ECS, API Gateway, CloudFront, Step Functions, EFS,
-KMS, Cognito, AppSync, and more. **Any other CloudFormation resource
-type** is handled via the Cloud Control API fallback (async polling).
-Resource types not supported by either path fail at deploy time with a
-clear error.
+cdkd deploys a resource in one of two ways. For more than 90 resource types
+it has an SDK provider, which is cdkd's own code for calling that service's
+API directly. These cover the most-used services: IAM, Lambda, S3, DynamoDB,
+EC2, RDS, ECS, API Gateway, CloudFront, Step Functions, EFS, KMS, Cognito,
+AppSync and more.
 
-See [Supported Resources](supported-resources.md) for the full
-per-type table.
+Any other CloudFormation resource type goes through the Cloud Control API,
+AWS's generic resource API. If neither way supports a type, the deploy fails
+with an error that names the type.
 
-## Other Features
+[Supported Resources](supported-resources.md) has the per-type table, and
+[Provisioning Layers](provisioning-layers.md) explains how a resource is
+routed.
 
-Rollback (`--no-rollback` opt-out) and Drift detection (`cdkd drift`) have
-their own pages — [Rollback](rollback.md) and
-[Drift Detection](drift.md) — they're surfaced as
-top-level features rather than table rows.
+## Template features
 
 | Feature | Status | Notes |
-|---------|--------|-------|
+| --- | --- | --- |
 | CloudFormation Parameters | ✅ | Default values, type coercion |
 | Conditions | ✅ | With logical operators |
-| Cross-stack references | ✅ | Via `Fn::ImportValue` + S3 state, with a CloudFormation `ListExports` fallback for CFn-managed producers |
-| Cross-region references | ✅ | Via `Fn::GetStackOutput` + S3 state, with a same-account CloudFormation `DescribeStacks` fallback. Cross-account via `RoleArn` (producer-account cdkd state only). |
-| JSON Patch updates | ✅ | RFC 6902, minimal patches; write-only properties re-included per registry schema (`cloudformation:DescribeType`, graceful fallback) |
-| Resource replacement detection | ✅ | 10+ resource types |
-| Dynamic References | ✅ | `{{resolve:secretsmanager:...}}`, `{{resolve:ssm:...}}`; secret-bearing ones (secretsmanager, or an ssm `SecureString` parameter) are persisted as the unresolved expression, never as plaintext. This holds across a NESTED-STACK boundary in both directions: a reference passed down through an `AWS::CloudFormation::Stack` row's `Parameters` is redacted in the CHILD's state (only for the child resources that actually consume it), and a redacted child OUTPUT is re-resolved before it reaches AWS rather than shipping the literal token |
-| DELETE idempotency | ✅ | Not-found errors treated as success |
-| Asset publishing (S3) | ✅ | Lambda code packages |
-| Asset publishing (ECR) | ✅ | Self-implemented Docker image publishing |
+| Cross-stack references | ✅ | `Fn::ImportValue`, with a CloudFormation `ListExports` fallback |
+| Cross-region references | ✅ | `Fn::GetStackOutput`; cross-account with `RoleArn` |
+| Dynamic References | ✅ | `{{resolve:secretsmanager:...}}`, `{{resolve:ssm:...}}` |
+| DeletionPolicy: Retain | ✅ | Skips deletion of the retained resource |
+| UpdateReplacePolicy: Retain | ✅ | Keeps the old resource on replacement |
+| UpdatePolicy | ⚠️ Ignored | See [above](#what-behaves-differently-from-cloudformation) |
 | Custom Resources (SNS-backed) | ✅ | SNS Topic ServiceToken + S3 response |
 | Custom Resources (CDK Provider) | ✅ | `isCompleteHandler` / `onEventHandler` async pattern detection |
-| DeletionPolicy: Retain | ✅ | Skip deletion for retained resources |
-| UpdateReplacePolicy: Retain | ✅ | Keep old resource on replacement |
-| UpdatePolicy | ⚠️ Ignored | `CodeDeployLambdaAliasUpdate` / ASG rolling-update policies are not processed — updates apply directly in one step (e.g. a Lambda alias flips instantly instead of CFn's gradual CodeDeploy canary shift). Intentional for dev/test iteration speed; the CodeDeploy application/deployment group resources themselves deploy fine (see `tests/integration/codedeploy-lambda-deployment-group`) |
+
+### Secrets from dynamic references stay out of state
+
+A dynamic reference to a secret, such as `{{resolve:secretsmanager:...}}`,
+is replaced by the secret's value during a deploy. cdkd never stores that
+value as plaintext. For a Secrets Manager secret or an SSM `SecureString`
+parameter, cdkd keeps the unresolved `{{resolve:...}}` expression in state,
+its record of what it deployed.
+
+The same holds for nested stacks, in both directions. A secret passed down
+through a nested stack's `Parameters` is redacted in the child stack's state.
+A redacted output of a child stack is resolved again before cdkd sends it to
+AWS.
+
+## Deploy behavior
+
+Rollback and drift detection have their own pages: [Rollback](rollback.md)
+and [Drift Detection](drift.md).
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| JSON Patch updates | ✅ | Cloud Control updates send only what changed (RFC 6902) |
+| Resource replacement detection | ✅ | 10+ resource types |
+| DELETE idempotency | ✅ | A resource that is already gone counts as deleted |
+| Asset publishing (S3) | ✅ | Lambda code packages |
+| Asset publishing (ECR) | ✅ | Self-implemented Docker image publishing |
 | Implicit delete dependencies | ✅ | VPC / IGW / EventBus / Subnet / RouteTable ordering |
-| Stack dependency resolution | ✅ | Auto-deploy dependency stacks, `-e` to skip |
+| Stack dependency resolution | ✅ | Stacks a stack depends on are deployed first; `-e` skips them |
 | Multi-stack parallel deploy | ✅ | Independent stacks deployed in parallel |
 | Attribute enrichment | ✅ | CloudFront OAI, DynamoDB StreamArn, API Gateway RootResourceId, Lambda FunctionUrl, Route53 HealthCheckId, ECR Repository Arn |
-| CC API null value stripping | ✅ | Removes null values before API calls |
-| Retry with HTTP status codes | ✅ | 429 / 503 + cause chain inspection |
+| Null value stripping | ✅ | Null values are removed before Cloud Control calls |
+| Retries | ✅ | Calls that fail with HTTP 429 or 503 are retried |
+
+A write-only property is one AWS accepts but never returns, such as a
+password. On a Cloud Control update, cdkd sends such a property again, using
+the type's schema from `cloudformation:DescribeType` to find it. If the
+schema cannot be read, the update still proceeds.
 
 ## Related
 
-- [Supported Resources](supported-resources.md) — per-type provider coverage
-- [`cdkd local invoke`](local-invoke.md) — the Lambda runtimes emulated locally
-- [Cross-Stack References](cross-stack-references.md) — how `Fn::ImportValue` resolves
-- [Troubleshooting](troubleshooting.md) — what to do when something is not supported
+- [Supported Resources](supported-resources.md): per-type provider coverage
+- [`cdkd local invoke`](local-invoke.md): the Lambda runtimes emulated
+  locally
+- [Cross-Stack References](cross-stack-references.md): how `Fn::ImportValue`
+  and `Fn::GetStackOutput` resolve
+- [Troubleshooting](troubleshooting.md): what to do when something is not
+  supported
