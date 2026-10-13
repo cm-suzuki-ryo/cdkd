@@ -10,17 +10,17 @@ CLEAN (one lane at a time), then run `/run-integ` and
 auto-mode classifier can refuse the PARENT's calls too: any refused call goes
 to `AskUserQuestion`, never a reworded retry (go-to-k/cdkd#4059); only
 `/run-integ` step 9's one retry (marker set or ledger push) is exempt.
-While that tree is busy with a follow-up branch, ship from a SECOND sibling
-on the PR's branch
+Ship from a SECOND sibling on the PR's branch while that tree holds a follow-up
 (`git -C <MAIN_CHECKOUT> worktree add <MAIN_CHECKOUT>/.claude/worktrees/<name> <branch>`),
 running BOTH the integ and the merge there (the marker is per tree). A fix
 round DURING that tree's integ edits a `--detach` sibling, pushes
 `HEAD:<branch>` (bash reads `verify.sh` live), and fast-forwards that tree
 before the marker, re-running an integ the fix touches (#4561). Never two
-lanes' integs or merges at once; a turn blocked on a fixture fix yields to
-the next merge-ready lane. A turn holding for HOURS: tell the user
-unasked its ETA and queue. A subagent running a turn's integs, marker
-and ledger must block until EVERY run ends and report ONCE.
+lanes' integs or merges at once, nor a merge during another lane's integ: it
+can move `main` under that batch (#4864). A turn blocked on a fixture fix
+yields to the next merge-ready lane. ANY turn holding for HOURS tells the user
+unasked its ETA and queue. A subagent running a turn's integs, marker and
+ledger must block until EVERY run ends and report ONCE.
 
 - The `integ-destroy` marker is read from the tree the command runs in, so a
   merge from the main tree consults the WRONG store (go-to-k/cdkd#2363). Its
