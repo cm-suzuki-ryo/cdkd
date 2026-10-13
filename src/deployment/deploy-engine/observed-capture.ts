@@ -149,7 +149,10 @@ export async function drainObservedCaptures(
   this: DeployEngine,
   stateResources: Record<string, ResourceState>
 ): Promise<number> {
-  if (this.observedCaptureTasks.size === 0) return 0;
+  // State schema v12: the one-time provenance capture lands in the same save,
+  // and counts toward it, so a no-change deploy persists what it captured.
+  const captured = await this.drainProvenanceCaptures(stateResources);
+  if (this.observedCaptureTasks.size === 0) return captured;
   const entries = Array.from(this.observedCaptureTasks.entries());
   this.observedCaptureTasks.clear();
   const resolved = await Promise.all(entries.map(([, p]) => p));
@@ -236,7 +239,7 @@ export async function drainObservedCaptures(
       // readback, so nothing there earns a baseline the import declined.
     }
   }
-  return installed;
+  return installed + captured;
 }
 
 /** The standalone inline policy type naming a principal of each kind, and its field. */

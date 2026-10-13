@@ -391,7 +391,7 @@ region the CDK app declares.
 ## Schema version history
 
 
-Writers always emit the current version, `version: 11`. Readers accept every
+Writers always emit the current version, `version: 12`. Readers accept every
 earlier version and upgrade it in memory; the next write persists the current
 shape. A binary that meets a version newer than it knows refuses the record
 with an "Upgrade cdkd" error.
@@ -409,6 +409,7 @@ with an "Upgrade cdkd" error.
 | 9 | `exportNames[]` on the stack |
 | 10 | `observedBaselineRefused` on each resource |
 | 11 | `noEchoLeaves` / `noEchoAttributeNames` on each resource; `NoEcho` values stored as `***` |
+| 12 | `referenceProvenance` on each resource, `outputReferenceProvenance` on the stack |
 
 `version: 2` and `version: 4` have no section of their own below: the first is
 the key layout every later section assumes, and the second is described with
@@ -838,7 +839,7 @@ current schema version on every state file it writes, so once a v10 binary has
 deployed a stack, every older binary fails on that stack, whether or not it
 holds a refused record. Upgrade the whole fleet together.
 
-### `version: 11` stores `NoEcho` values as `***` (current writers)
+### `version: 11` stores `NoEcho` values as `***`
 
 Schema `version: 11` keeps the value of a `NoEcho: true` template parameter
 out of everything cdkd writes down. Before it, cdkd masked such a value in its
@@ -1116,6 +1117,88 @@ is already `***`.
 `version: 11` alone therefore does not mean a stack's values are masked, and
 only a `cdkd deploy` migrates it.
 
+### `version: 12` records where each reference was resolved (current writers)
+
+Schema `version: 12` records, for each `{{resolve:...}}` token a record holds,
+the region that resolved it and which version of the secret it stood for
+(issues [#4847](https://github.com/go-to-k/cdkd/issues/4847) and
+[#4852](https://github.com/go-to-k/cdkd/issues/4852)). A token on its own
+says neither: the same secret name in two regions is two secrets, and a
+rotated secret keeps its token while its value changes.
+
+```typescript
+interface ReferenceProvenance {
+  region?: string;         // the region whose lookup produced the value; absent = a conflict, or not known
+  versions?: string[];     // the secret's own version ids, sorted, at most 8
+  readVersions?: string[]; // the subset of `versions` that reached the record through a READ
+}
+```
+
+A version id is the Secrets Manager `VersionId` or the SSM parameter
+`Version`, read off the `GetSecretValue` / `GetParameter` response cdkd
+already receives; it is metadata AWS returns without the value, and never a
+hash of it. A version reaches `readVersions` when the value came through a
+`Fn::GetAtt` / `Ref` of a recorded value, a cross-stack read, or a nested
+stack parameter; a token the template spells is the `literal` route and
+never enters it. `outputReferenceProvenance` is keyed by output first, so two
+outputs holding one token at two versions keep apart.
+
+The field is the discriminator, not `version`: ABSENT means not known (every
+record written before v12, and a record holding no token), and every reader
+then takes the v11 path; `{}` means known, with nothing attributed. A reader
+goes through `src/deployment/reference-provenance-record.ts`, which validates
+each entry: a `region` that is not a canonical client-safe region is dropped;
+a version that fails its service's shape (`^[0-9]{1,10}$` for SSM,
+`^[A-Za-z0-9_+=.@/-]{32,64}$` for Secrets Manager) drops `versions` and
+`readVersions` and keeps `region`; `readVersions` that is not a subset of
+`versions` makes the whole entry read as absent.
+
+**How a deploy writes it.** The save (`redactStateForPersist`) gives a record
+the deploy WROTE this run's entries for the tokens its persisted form holds,
+and leaves a record it did not write exactly as it was, without walking it.
+On an update in place, a token with any occurrence under a create-only path
+(or any token when the type's create-only paths are not known), or in
+attributes carried from the previous record, keeps every version AWS may
+still hold there: `versions` is the previous set joined with this run's, at
+most 8 (beyond that, or when the previous set is not known, the versions are
+dropped), and `readVersions` is this run's. A stack whose `state.json` holds
+no token and no provenance field is recognised from the raw body at load
+(`src/state/token-free-state.ts`) and does none of this work.
+
+#### Migration
+
+No read-time migration: a v11 document is read unchanged, and the next
+`cdkd deploy` writes `version: 12`. A record that deploy writes gains the
+field from its own resolution. A record it leaves unchanged and that holds a
+token gains it through a ONE-TIME capture
+(`src/deployment/deploy-engine/provenance-capture.ts`): once the plan is final
+(and, when the deploy changes something, past `--require-approval`), in the
+background and one record at a time, the deploy resolves each of that record's
+template `Properties` whose stored value holds a token, once, in a throwaway
+context, and keeps the region of each token it attributes, the
+version only where the record's physical id contains the token's current
+value, and never `readVersions`. It sends nothing and changes no other field.
+One bit follows from that rule and is accepted: whether a captured entry has
+`versions` says whether the token's current value occurs in the record's
+physical id. For a resource named from the secret the physical id beside the
+token already shows that, and the v11 "Serving ... as recorded" warning
+prints the opposite case.
+A token it cannot attribute (access denied, a region it cannot tell, nothing
+resolved) gets `{}`, with one warning naming the record; that is final until
+the record is next written. A throttled lookup leaves the field absent, so
+the next deploy retries that record. The capture is drained with the
+observed-property captures before the save, and a deploy whose records all
+have the field makes no capture lookup.
+
+An older cdkd refuses a `version: 12` record with the "Upgrade cdkd" error,
+as for every bump. The exports index is unchanged.
+
+**Measuring calls.** `CDKD_SDK_CALL_LOG=<file>` makes each cdkd process append
+one JSON line to the file at exit: its pid, its command line with every flag
+value dropped, the time, and a count of every AWS SDK command it sent, by
+client and command (`src/utils/sdk-call-log.ts`). Nothing of a request,
+response or flag value is kept.
+
 ## Fields added without a version bump
 
 
@@ -1339,7 +1422,7 @@ output's value changes (it used to be kept as written).
 So these are NOT sent through the mask: a flip of a condition over a `NoEcho`
 parameter, and a new value of anything above. (A new value of the `NoEcho`
 parameter itself is found by reading the resource back from AWS; see
-[`version: 11`](#version-11-stores-noecho-values-as-current-writers).) A hash
+[`version: 11`](#version-11-stores-noecho-values-as).) A hash
 that moved with such a value would let anyone holding the state file test
 guesses of it. CloudFormation would update the resource; change the
 property's template text, or replace the resource, to push one.
@@ -1405,7 +1488,7 @@ hash too, and edits to it are not seen through the mask.
 
 ```typescript
 interface StackState {
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11  // 1 = legacy, 2 = region-prefixed, 3 = +observedProperties, 4 = +imports[], 5 = +deletionPolicy/updateReplacePolicy, 6 = +parentStack/parentLogicalId/parentRegion (nested-stack adoption), 7 = +provisionedBy on ResourceState, 8 = +outputReads[], 9 = +exportNames[], 10 = +observedBaselineRefused on ResourceState, 11 = +noEchoLeaves/noEchoAttributeNames on ResourceState
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12  // 1 = legacy, 2 = region-prefixed, 3 = +observedProperties, 4 = +imports[], 5 = +deletionPolicy/updateReplacePolicy, 6 = +parentStack/parentLogicalId/parentRegion (nested-stack adoption), 7 = +provisionedBy on ResourceState, 8 = +outputReads[], 9 = +exportNames[], 10 = +observedBaselineRefused on ResourceState, 11 = +noEchoLeaves/noEchoAttributeNames on ResourceState, 12 = +referenceProvenance on ResourceState and +outputReferenceProvenance
   stackName: string                        // Stack name
   region?: string                          // Required on version >= 2
   resources: Record<string, ResourceState> // Logical ID → Resource state
@@ -1419,6 +1502,7 @@ interface StackState {
   parentStack?: string                     // v6+: populated on nested-stack child state records (undefined on top-level)
   parentLogicalId?: string                 // v6+: child's AWS::CloudFormation::Stack logical id in the parent's template
   parentRegion?: string                    // v6+: parent's region (always equals `region` until cross-region nested stacks ship)
+  outputReferenceProvenance?: Record<string, Record<string, ReferenceProvenance>> // v12+: outputs key → token → where and at which version it was resolved; absent = not known
   lastModified: number                     // Unix timestamp (milliseconds)
 }
 ```
@@ -1844,6 +1928,7 @@ interface ResourceState {
   noEchoLeaves?: (string | number)[][]         // v11+: positions in `properties` stored as `***` for a NoEcho value
   noEchoAttributeNames?: string[]              // v11+: `attributes` the provider declared NoEcho, each stored as `***`
   noEchoExactEchoLeaves?: string[][]           // optional, no bump: `noEchoLeaves` positions AWS reports exactly
+  referenceProvenance?: Record<string, ReferenceProvenance> // v12+: token → { region?, versions?, readVersions? }; absent = not known
   acceptedCreateOnlyDrops?: string[] // optional, no bump: create-only properties the SDK route was told to drop, so never sent
   maskedPropertyFingerprints?: Record<string, string> // optional, no bump: per property `properties` holds as `***`, a hash of its template text (issue #4451)
   maskedPropertyInputFingerprints?: Record<string, string> // optional, no bump: per such property, a hash of its template value with its non-secret inputs resolved, bound to the text hash (issue #4543)

@@ -88,6 +88,8 @@ import {
   prefetchCreateTokenLedger,
 } from '../../provisioning/providers/create-token-ledger.js';
 import { secretNamedRecordNeedles } from '../secret-name-needles.js';
+import { isKnownTokenFreeState } from '../../state/token-free-state.js';
+import { provenanceBaselineOf } from './provenance-capture.js';
 
 declare module '../deploy-engine.js' {
   interface DeployEngine {
@@ -275,6 +277,13 @@ export async function doDeployWithPrefetch(
       stackName,
       this.stackRegion,
       this.options.refusalRecovery
+    );
+    // State schema v12: the loaded outputs bag and its provenance, for a save
+    // that carries that bag forward. After the refusals, which own the first
+    // read of the bag.
+    this.provenanceBaseline = provenanceBaselineOf(
+      currentState,
+      isKnownTokenFreeState(currentStateData?.state)
     );
     // Set when we loaded a `version: 1` legacy record. The next save
     // migrates it to the new key.
@@ -936,10 +945,31 @@ export async function doDeployWithPrefetch(
       firstDeployStateGate = undefined;
       await gate;
     }
+    // State schema v12 (go-to-k/cdkd#4847 / #4852): the one-time migration
+    // capture of each unchanged record that holds a token and no provenance,
+    // OFF the critical path (drained with the observed captures before a
+    // save). Started once the change map is final (a recreate target is no
+    // longer NO_CHANGE) and, on the change path, past `--require-approval`, so
+    // a refused or declined deploy spends no lookup. A token-free stack never
+    // enters it; `--dry-run` saves nothing.
+    const startProvenanceCapture = (): void => {
+      if (this.options.dryRun || isKnownTokenFreeState(currentStateData?.state)) return;
+      this.kickOffProvenanceCapture({
+        noChange: this.diffCalculator
+          .filterByType(changes, 'NO_CHANGE')
+          .map((change) => change.logicalId),
+        resources: currentState.resources,
+        template: effectiveTemplate,
+        parameters: parameterValues,
+        conditions,
+        stackName,
+      });
+    };
     const hasChanges = this.diffCalculator.hasChanges(changes);
 
     if (!hasChanges) {
       this.logger.info('No changes detected. Stack is up to date.');
+      startProvenanceCapture();
 
       // The diff only inspects Resources, so an Outputs-only change (a new
       // Export added because a downstream stack now references this one — its
@@ -1151,8 +1181,21 @@ export async function doDeployWithPrefetch(
           await requireOutputsOnlyApproval({ options: this.options, stackName });
         }
 
+        // State schema v12: the outputs' share of the migration. A record
+        // written before v12 has no `outputReferenceProvenance`; this deploy
+        // resolved an equal bag, so its provenance is saved once.
+        const outputProvenanceBackfill =
+          !outputsChanged &&
+          currentState.outputReferenceProvenance === undefined &&
+          this.provenanceBaseline?.tokenFree === false &&
+          this.outputReferenceProvenanceFor(
+            persistedOutputs,
+            this.redactOutputs(persistedOutputs)
+          ) !== undefined;
+
         if (
           observedRefresh ||
+          outputProvenanceBackfill ||
           maskedFingerprintsBackfilled ||
           conditionVerdictsChanged ||
           outputsChanged ||
@@ -1426,6 +1469,7 @@ export async function doDeployWithPrefetch(
     // go-to-k/cdkd#4705: the prompt may have waited; the lookups made before
     // it are read again at each create.
     if (prompted) this.generatedNameGuard?.noteApprovalPrompted();
+    startProvenanceCapture();
     // The one intent write (review P1): past the prompt and the destructive
     // check, under the lock, before the first create (each awaits it).
     this.generatedNameGuard?.recordPlannedIntents();
