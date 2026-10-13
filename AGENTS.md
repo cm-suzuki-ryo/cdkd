@@ -38,6 +38,16 @@ is no `package.json` `scripts` block. Setup and the full task list:
   `changelog.d/entries/`; [changelog.d/_header.md](changelog.d/_header.md) is
   the contract. Agent instructions, tests, CI, hooks and docs write none.
 
+## Design principles
+
+**Performance is cdkd's defining value**: never slow an ordinary deploy, and
+add no AWS or S3 call a deploy does not need. Then **CloudFormation parity**:
+do what the AWS CDK CLI / CloudFormation does. On a separate axis, never
+ranked below these: no regression, no new plaintext secret or exposure, an
+error names the cause and the next step, and a schema bump migrates users' S3
+state automatically (nothing puts it back). When two conflict, record at the
+site which gave way and why.
+
 ## Rules you cannot recover from
 
 - **Never commit or push to `main`.** Every change arrives through a PR. The
@@ -76,9 +86,8 @@ is no `package.json` `scripts` block. Setup and the full task list:
   localized gloss. Chat with the user may be in another language; the line is
   whether the text becomes public. CI enforces it.
 - **Never change `CLAUDE_CODE_THRIFTY_SONIC: "0"` in `.claude/settings.json`.**
-  With that flag on, files are read and written through `cat` / `sed -i`, which
-  silently makes the file-tool-keyed hooks and **every `paths:`-scoped rule**
-  inert — a `cat`-read subsystem gets none of its notes.
+  With it on, files go through `cat` / `sed -i`, which silently disables the
+  file-tool hooks and **every `paths:`-scoped rule**.
 
 ## Verifying and merging
 
@@ -88,14 +97,10 @@ is no `package.json` `scripts` block. Setup and the full task list:
   (each is `.claude/skills/<name>/SKILL.md`, followable by hand where slash
   commands are not available). Recommended, not enforced — nothing blocks them,
   and skipping them is how main goes red.
-- **Cost is not a tiebreaker for verification depth** on a `src/**` change.
-  Wall-clock, tokens and "this is probably fine" are never reasons to take the
-  weaker of two options: take the more thorough one, and when genuinely unsure
-  take the higher tier. Run every integ `/pick-integ` surfaces rather than
-  narrowing to one, and build the fixture arm rather than shipping a
-  hard-to-reach path on unit tests plus reasoning — a path that is hard to reach
-  is exactly the one with no coverage. This does **not** apply to building
-  tooling; the Tooling Policy bounds that.
+- **Cost is not a tiebreaker for verification depth** on a `src/**` change:
+  tokens, wall-clock or "probably fine" never justify the weaker option; when
+  unsure take the higher tier. Run every `/pick-integ` integ; a hard-to-reach
+  path gets a fixture arm, not unit tests plus reasoning. Not for tooling.
 - **Integration tests run through `/run-integ <name>`, never a manual
   `cdkd deploy` / `cdkd destroy`** — it is the only path that pairs deploy with
   destroy plus orphan verification and records the run. `/pick-integ` chooses.
@@ -103,10 +108,7 @@ is no `package.json` `scripts` block. Setup and the full task list:
   them up through direct AWS API calls before anything else.
 - **Deletion logic and state-schema bumps cannot merge on green CI alone.** Each
   is held by a marker gate until `/run-integ` records a clean real-AWS run, so
-  budget that run before planning the merge. For a schema bump this is a design
-  constraint before it is a check: the migration rewrites state documents in
-  USERS' S3 buckets and nothing puts them back, so **transparent auto-migration
-  is absolute**.
+  budget that run before planning the merge.
 - **Dispatch reviewers with `/review-pr`**, which owns the counts and the
   trigger list. They are read-only sub-agents, run once on the final sha; a fix
   round goes back to the same reviewer with the delta, never a fresh dispatch.
