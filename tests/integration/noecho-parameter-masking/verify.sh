@@ -40,7 +40,9 @@
 #      prints a piece.
 #      NoEchoStringToken is declared with the STRING form `NoEcho: "true"`:
 #      its value is absent from the --verbose log, from state.json and from
-#      Phase 1b's `cdkd diff` (go-to-k/cdkd#4824).
+#      Phase 1b's `cdkd diff` (go-to-k/cdkd#4824), and NoEchoStringConsumer's
+#      `Resolved Fn::Sub:` line masks the whole value, as NoEchoConsumer's
+#      does (go-to-k/cdkd#4831).
 #   1b. Redeploy unchanged (#4043 Phase B): the readback finds the value AWS
 #      holds, so neither SSM parameter is updated (LastModifiedDate unchanged);
 #      `cdkd diff --fail` exits 0; `cdkd drift --json` exits 0 and reports
@@ -95,6 +97,12 @@
 #      marked record still stores the name in plaintext; the deploy must not
 #      replace the topic (an out-of-band tag survives), must not print the
 #      name, and must store `***` named in noEchoLeaves.
+#   4v. LOAD-BEARING (go-to-k/cdkd#4831): an isolated stack whose topic holds
+#      a string-declared NoEcho value as a literal TopicName. Deployed by
+#      @go-to-k/cdkd@0.297.0 (record marked at DisplayName, the copy in
+#      plaintext), then unchanged by this binary: no replacement (tag kept),
+#      no plaintext in the output, and the copy stored as `***` named in
+#      noEchoLeaves. Destroyed in the same phase.
 #   4c. Redeploy with CDKD_TEST_NOECHO_RENAME=true again: the topic is
 #      value-named for the destroy.
 #   4d. Rewrite NoEchoRenamed's record as a binary before schema v11 stored
@@ -243,6 +251,23 @@ if [ "${#WITNESS_NAME}" -lt 40 ]; then
 fi
 export CDKD_TEST_NOECHO_WITNESS_NAME="${WITNESS_NAME}"
 WITNESS_ARN="arn:aws:sns:${REGION}:${ACCOUNT_ID}:${WITNESS_NAME}"
+# go-to-k/cdkd#4831, the two-binary arm (Phase 4v): an isolated second stack,
+# deployed first by the release before #4830, then by this binary.
+VA_STACK="CdkdNoechoValueArmExample"
+VA_STATE_KEY="cdkd/${VA_STACK}/${REGION}/state.json"
+VA_PREFIX="$(s3_stack_prefix "${VA_STACK}" "${REGION}")"
+VA_CDKD_VERSION="0.297.0"
+VA_TMPDIR=""
+VA_NAME="CdkdNoEchoValueArm$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+if [ "${#VA_NAME}" -lt 30 ]; then
+  echo "FAIL: premise: could not generate the value-arm topic name" >&2
+  exit 1
+fi
+export CDKD_TEST_NOECHO_VALUE_ARM_NAME="${VA_NAME}"
+VA_ARN="arn:aws:sns:${REGION}:${ACCOUNT_ID}:${VA_NAME}"
+# The topic's Fn::GetAtt TopicArn reader (security review m1, go-to-k/cdkd#4849).
+VA_READER="/cdkd-test/noecho-value-arm/$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+export CDKD_TEST_NOECHO_VALUE_ARM_READER="${VA_READER}"
 RENAME_NEW_ARN="${RENAME_TOPIC_PREFIX}-${TOKEN}"
 
 LOCAL_DIST="${PWD}/../../../dist/cli.js"
@@ -282,7 +307,7 @@ SCRATCH_FILES=()
 # the value: these paths exist to detect a masking regression, and echoing the
 # log there would print exactly what failed to be masked.
 diag_output() { # diag_output <text>
-  if [[ "$1" == *"${TOKEN}"* ]] || [[ "$1" == *"${STRING_TOKEN}"* ]] || [[ "$1" == *"${SNAP_STEM}"* ]] || [[ "$1" == *"${SPLIT_A}"* ]] || [[ "$1" == *"${SPLIT_B}"* ]] \
+  if [[ "$1" == *"${TOKEN}"* ]] || [[ "$1" == *"${STRING_TOKEN}"* ]] || [[ -n "${VA_NAME:-}" && "$1" == *"${VA_NAME}"* ]] || [[ "$1" == *"${SNAP_STEM}"* ]] || [[ "$1" == *"${SPLIT_A}"* ]] || [[ "$1" == *"${SPLIT_B}"* ]] \
     || [[ "$1" == *"${ALIAS_TOKEN}"* ]] || [[ -n "${ALIAS_ENCODING:-}" && "$1" == *"${ALIAS_ENCODING}"* ]]; then
     echo "    (output withheld: it carries a NoEcho value, split piece or encoding)" >&2
   else
@@ -360,6 +385,20 @@ cleanup() {
   fi
   aws sns delete-topic --topic-arn "${RENAME_OLD_ARN}" --region "${REGION}" >/dev/null 2>&1 || true
   aws sns delete-topic --topic-arn "${WITNESS_ARN:-}" --region "${REGION}" >/dev/null 2>&1 || true
+  # Phase 4v's isolated stack (go-to-k/cdkd#4831).
+  va_destroy_rc=1
+  if [ -f "${LOCAL_DIST}" ] && [ -n "${VA_STACK:-}" ]; then
+    node "${LOCAL_DIST}" state destroy "${VA_STACK}" --state-bucket "${STATE_BUCKET:-}" \
+      --region "${REGION}" --yes >/dev/null 2>&1
+    va_destroy_rc=$?
+  fi
+  aws sns delete-topic --topic-arn "${VA_ARN:-}" --region "${REGION}" >/dev/null 2>&1 || true
+  if [ -n "${VA_READER:-}" ]; then
+    aws ssm delete-parameter --name "${VA_READER}" --region "${REGION}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${VA_TMPDIR:-}" ] && [ -d "${VA_TMPDIR}" ]; then
+    rm -rf "${VA_TMPDIR}" || true
+  fi
   aws sns delete-topic --topic-arn "${RENAME_NEW_ARN}" --region "${REGION}" >/dev/null 2>&1 || true
   # NoEchoSnapshotGroup and the final snapshot its removal takes (#3869),
   # swept by the `${SNAP_STEM}-final-` prefix. A snapshot still `creating`
@@ -401,6 +440,11 @@ cleanup() {
     fi
     aws s3 rm "s3://${STATE_BUCKET}/cdkd/${CHILD_STACK}/${REGION}/lock.json" >/dev/null 2>&1 || true
     s3_purge_prefix_versions "${STATE_BUCKET}" "${CHILD_PREFIX:-}" noncurrent || true
+    if [ "${va_destroy_rc:-1}" -eq 0 ]; then
+      aws s3 rm "s3://${STATE_BUCKET}/${VA_STATE_KEY:-}" >/dev/null 2>&1 || true
+    fi
+    aws s3 rm "s3://${STATE_BUCKET}/cdkd/${VA_STACK:-}/${REGION}/lock.json" >/dev/null 2>&1 || true
+    s3_purge_prefix_versions "${STATE_BUCKET}" "${VA_PREFIX:-}" noncurrent || true
     # NONCURRENT only here: this also runs from the failure traps, where a live
     # state.json may still be the only record of standing resources. The
     # success path does the full sweep and asserts it.
@@ -504,11 +548,30 @@ if [[ "${DEPLOY_OUT_P1}" == *"${STRING_TOKEN}"* ]]; then
   exit 1
 fi
 # PREMISE for the negative above: NoEchoStringConsumer's substitution logged
-# its masked line. Its value is a log-only needle, so the inert frame stays
-# (`str-***`, measured; `str-<value>` before the fix), unlike NoEchoConsumer's
-# whole `***`. Absent, its line went missing and the negative passed for free.
-if ! grep -qE 'Resolved Fn::Sub: str-\*\*\*$' <<< "${DEPLOY_OUT_P1}"; then
-  echo "FAIL: premise: the Phase 1 --verbose log carries no 'Resolved Fn::Sub: str-***' line -- NoEchoStringConsumer's substitution was not logged, or not masked as measured (go-to-k/cdkd#4824)" >&2
+# its masked line. Since go-to-k/cdkd#4831 lifted the boolean-only gate, the
+# string form's value is a fresh mask-only needle like the boolean form's, so
+# the line masks the WHOLE resolved value (`Resolved Fn::Sub: ***`, measured;
+# `str-***` while only a log-only needle, `str-<value>` before #4824). The
+# template's two Fn::Sub readers of a NoEcho value (NoEchoConsumer's `token-`
+# and this one) each log once on the fresh create (measured), so EXACTLY one
+# whole-mask line per reader is required, and every `Resolved Fn::Sub:` line
+# must be one: a reader logged twice could otherwise stand in for this one's
+# missing line, and the negative above would pass for free. A change in how
+# often a line is logged fails here loudly.
+SUB_READERS=$(jq -r '[.Resources[] | .Properties // {} | .. | objects | .["Fn::Sub"]? | strings
+  | select(test("\\$\\{NoEcho(String)?Token\\}"))] | length' "${SYNTH_TEMPLATE}")
+if [ "${SUB_READERS}" != "2" ]; then
+  echo "FAIL: premise: the Phase 1 template has ${SUB_READERS} Fn::Sub readers of NoEchoToken / NoEchoStringToken, expected 2 (NoEchoConsumer, NoEchoStringConsumer) -- the line count below would not discriminate" >&2
+  exit 1
+fi
+if grep -qE 'Resolved Fn::Sub: str-' <<< "${DEPLOY_OUT_P1}"; then
+  echo "FAIL: NoEchoStringConsumer's 'Resolved Fn::Sub:' line keeps its 'str-' frame -- the string-declared value is a log-only needle again, not the fresh mask-only needle the boolean form is (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+SUB_MASKED=$(grep -cE 'Resolved Fn::Sub: \*\*\*$' <<< "${DEPLOY_OUT_P1}" || true)
+SUB_LINES=$(grep -c 'Resolved Fn::Sub:' <<< "${DEPLOY_OUT_P1}" || true)
+if [ "${SUB_MASKED}" != "${SUB_READERS}" ] || [ "${SUB_LINES}" != "${SUB_READERS}" ]; then
+  echo "FAIL: premise: the Phase 1 --verbose log carries ${SUB_MASKED} whole-mask 'Resolved Fn::Sub: ***' line(s) of ${SUB_LINES} 'Resolved Fn::Sub:' line(s), expected exactly ${SUB_READERS} of ${SUB_READERS} -- NoEchoStringConsumer's substitution was not logged, not masked whole, or a reader logged more than once (go-to-k/cdkd#4824 / #4831)" >&2
   diag_output "${DEPLOY_OUT_P1}"
   exit 1
 fi
@@ -1816,6 +1879,149 @@ if [ "$(jq -r '.resources.NoEchoWitnessTopic.properties.TopicName' "${P4W_STATE}
 fi
 echo "    OK: the newly declared NoEcho name is not replaced, and state holds *** named in noEchoLeaves"
 
+# --- Phase 4v: two binaries, a string-declared NoEcho value copied as a literal
+# go-to-k/cdkd#4831, LOAD-BEARING. The isolated CdkdNoechoValueArmExample stack
+# declares NoEchoValueArmName NoEcho in the STRING form; its topic reads it in
+# DisplayName and holds the same value as a literal TopicName. The release
+# before #4830 stores DisplayName as `***` (marking the record) and the literal
+# copy in plaintext. This binary, redeploying unchanged, must not replace the
+# topic, must print no plaintext, and must store the copy as `***` named in
+# noEchoLeaves.
+echo "==> Phase 4v: deploy the value-arm stack with @go-to-k/cdkd@${VA_CDKD_VERSION}, then unchanged with this binary"
+VA_TMPDIR="$(mktemp -d)"
+(cd "${VA_TMPDIR}" && npm init -y >/dev/null && npm install --silent --ignore-scripts "@go-to-k/cdkd@${VA_CDKD_VERSION}" >/dev/null)
+VA_BIN="${VA_TMPDIR}/node_modules/@go-to-k/cdkd/dist/cli.js"
+if [ ! -f "${VA_BIN}" ]; then
+  echo "FAIL: premise: @go-to-k/cdkd@${VA_CDKD_VERSION} was not installed at ${VA_BIN}" >&2
+  exit 1
+fi
+if ! VA_OLD_OUT=$(node "${VA_BIN}" deploy "${VA_STACK}" \
+  --state-bucket "${STATE_BUCKET}" \
+  --region "${REGION}" \
+  --yes 2>&1); then
+  echo "FAIL: the Phase 4v deploy with @go-to-k/cdkd@${VA_CDKD_VERSION} exited non-zero" >&2
+  # That release prints the string-declared value: show the lines without it.
+  diag_output "$(grep -vF -- "${VA_NAME}" <<< "${VA_OLD_OUT}" || true)"
+  exit 1
+fi
+VA_STATE=$(mktemp)
+SCRATCH_FILES+=("${VA_STATE}")
+aws s3 cp "s3://${STATE_BUCKET}/${VA_STATE_KEY}" "${VA_STATE}" --region "${REGION}" --quiet
+# PREMISE: the older binary wrote the shape this arm is about.
+if [ "$(jq -r '.resources.NoEchoValueArmTopic.properties.TopicName' "${VA_STATE}")" != "${VA_NAME}" ] \
+  || [ "$(jq -r '.resources.NoEchoValueArmTopic.properties.DisplayName' "${VA_STATE}")" != '***' ] \
+  || [ "$(jq -c '.resources.NoEchoValueArmTopic.noEchoLeaves // "<absent>"' "${VA_STATE}")" != '[["DisplayName"]]' ]; then
+  echo "FAIL: premise: @go-to-k/cdkd@${VA_CDKD_VERSION} did not store NoEchoValueArmTopic as a record marked at DisplayName with the literal TopicName in plaintext" >&2
+  exit 1
+fi
+if [ "$(jq -r '.resources.NoEchoValueArmReader.physicalId // "<absent>"' "${VA_STATE}")" != "${VA_READER}" ]; then
+  echo "FAIL: premise: @go-to-k/cdkd@${VA_CDKD_VERSION} did not create the TopicArn reader NoEchoValueArmReader" >&2
+  exit 1
+fi
+if gone_probe aws sns get-topic-attributes --topic-arn "${VA_ARN}" --region "${REGION}"; then
+  echo "FAIL: premise: AWS holds no value-arm topic after the older binary's deploy" >&2
+  exit 1
+fi
+VA_MARKER="cdkd-noecho-p4v-${RANDOM}${RANDOM}"
+aws sns tag-resource --region "${REGION}" --resource-arn "${VA_ARN}" \
+  --tags "Key=cdkd-p4v-marker,Value=${VA_MARKER}" >/dev/null
+if ! VA_NEW_OUT=$(node "${LOCAL_DIST}" deploy "${VA_STACK}" \
+  --state-bucket "${STATE_BUCKET}" \
+  --region "${REGION}" \
+  --verbose \
+  --yes 2>&1); then
+  echo "FAIL: the Phase 4v redeploy with this binary exited non-zero (go-to-k/cdkd#4831)" >&2
+  diag_output "$(grep -vF -- "${VA_NAME}" <<< "${VA_NEW_OUT}" || true)"
+  exit 1
+fi
+if [[ "${VA_NEW_OUT}" == *"Replacing NoEchoValueArmTopic"* ]]; then
+  echo "FAIL: the Phase 4v redeploy REPLACED NoEchoValueArmTopic -- an unchanged string-declared NoEcho value read as a create-only change (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+# PREMISE for the negative below: the run printed the topic's physical id
+# (the warning that keeps it in state), so a line that could carry the value
+# was emitted, masked.
+if [[ "${VA_NEW_OUT}" != *"NoEchoValueArmTopic: its physical id contains a NoEcho parameter value"* ]]; then
+  echo "FAIL: premise: the Phase 4v redeploy printed no 'NoEchoValueArmTopic: its physical id contains a NoEcho parameter value' line -- the value arm did not see the copy, or the wording drifted (go-to-k/cdkd#4831)" >&2
+  diag_output "$(grep -vF -- "${VA_NAME}" <<< "${VA_NEW_OUT}" || true)"
+  exit 1
+fi
+if [[ "${VA_NEW_OUT}" == *"${VA_NAME}"* ]]; then
+  echo "FAIL: the Phase 4v redeploy output carries the string-declared NoEcho value in plaintext (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+if gone_probe aws sns get-topic-attributes --topic-arn "${VA_ARN}" --region "${REGION}"; then
+  echo "FAIL: NoEchoValueArmTopic is gone after the Phase 4v redeploy (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+VA_TAG=$(aws sns list-tags-for-resource --region "${REGION}" --resource-arn "${VA_ARN}" \
+  --query "Tags[?Key=='cdkd-p4v-marker'].Value | [0]" --output text)
+if [ "${VA_TAG}" != "${VA_MARKER}" ]; then
+  echo "FAIL: NoEchoValueArmTopic lost its out-of-band tag in Phase 4v -- it was replaced under the same name (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+aws s3 cp "s3://${STATE_BUCKET}/${VA_STATE_KEY}" "${VA_STATE}" --region "${REGION}" --quiet
+if [ "$(jq -r '.resources.NoEchoValueArmTopic.properties.TopicName' "${VA_STATE}")" != '***' ] \
+  || [ "$(jq -c '.resources.NoEchoValueArmTopic.noEchoLeaves // "<absent>"' "${VA_STATE}")" != '[["DisplayName"],["TopicName"]]' ]; then
+  echo "FAIL: after Phase 4v, state.json does not store the literal copy of the string-declared NoEcho value as the mask named in noEchoLeaves -- the value arm skipped the string form (go-to-k/cdkd#4831)" >&2
+  exit 1
+fi
+# The reader edit (security review m1, go-to-k/cdkd#4849): the topic is NAMED
+# from the value, so its ARN carries it. State must keep that ARN as the
+# physical id is kept, or a deploy re-resolving NoEchoValueArmTopic.TopicArn
+# for the edited reader is refused with the redaction mask.
+if [ "$(jq -r '.resources.NoEchoValueArmTopic.attributes.TopicArn' "${VA_STATE}")" != "${VA_ARN}" ]; then
+  echo "FAIL: after Phase 4v, state.json does not hold NoEchoValueArmTopic.attributes.TopicArn as the topic's ARN -- it was masked, and a reader edit will be refused (go-to-k/cdkd#4849)" >&2
+  exit 1
+fi
+if ! VA_EDIT_OUT=$(CDKD_TEST_NOECHO_VALUE_ARM_EDIT=true node "${LOCAL_DIST}" deploy "${VA_STACK}" \
+  --state-bucket "${STATE_BUCKET}" \
+  --region "${REGION}" \
+  --verbose \
+  --yes 2>&1); then
+  if [[ "${VA_EDIT_OUT}" == *"redaction mask"* ]]; then
+    echo "FAIL: the Phase 4v reader edit was refused reading NoEchoValueArmTopic.TopicArn as the redaction mask (go-to-k/cdkd#4849)" >&2
+  else
+    echo "FAIL: the Phase 4v reader edit exited non-zero" >&2
+  fi
+  diag_output "$(grep -vF -- "${VA_NAME}" <<< "${VA_EDIT_OUT}" || true)"
+  exit 1
+fi
+# The one run of the reader's UPDATE path: its output must not carry the value
+# either (the resolved ARN, the update diff, a retry line).
+if [[ "${VA_EDIT_OUT}" == *"${VA_NAME}"* ]]; then
+  echo "FAIL: the Phase 4v reader edit output carries the string-declared NoEcho value in plaintext (go-to-k/cdkd#4849)" >&2
+  exit 1
+fi
+# GetParameter carries no Description; DescribeParameters carries no Value.
+# JSON output merges DescribeParameters' pages before the query (`--output text`
+# would apply it per page, and a page may come back empty).
+VA_READ_VALUE=$(aws ssm get-parameter --name "${VA_READER}" --region "${REGION}" \
+  --query Parameter.Value --output text)
+VA_READ_DESC=$(aws ssm describe-parameters --region "${REGION}" \
+  --parameter-filters "Key=Name,Values=${VA_READER}" --query 'Parameters[].Description' --output json \
+  | jq -r 'if length == 1 then .[0] else "<\(length) matches>" end')
+if [ "${VA_READ_VALUE}" != "${VA_ARN}" ] || [ "${VA_READ_DESC}" != "edited" ]; then
+  echo "FAIL: after the Phase 4v reader edit, the reader does not hold the topic's ARN with the edited description (got description '${VA_READ_DESC}') (go-to-k/cdkd#4849)" >&2
+  exit 1
+fi
+if ! node "${LOCAL_DIST}" destroy "${VA_STACK}" \
+  --state-bucket "${STATE_BUCKET}" \
+  --region "${REGION}" \
+  --yes >/dev/null 2>&1; then
+  echo "FAIL: the Phase 4v destroy of ${VA_STACK} exited non-zero" >&2
+  exit 1
+fi
+assert_gone "NoEchoValueArmTopic still exists after its destroy" \
+  aws sns get-topic-attributes --topic-arn "${VA_ARN}" --region "${REGION}"
+assert_gone "NoEchoValueArmReader still exists after its destroy" \
+  aws ssm get-parameter --name "${VA_READER}" --region "${REGION}"
+assert_gone "state file s3://${STATE_BUCKET}/${VA_STATE_KEY} still exists after its destroy" \
+  aws s3api head-object --bucket "${STATE_BUCKET}" --key "${VA_STATE_KEY}"
+rm -rf "${VA_TMPDIR}"
+VA_TMPDIR=""
+echo "    OK: the string-declared value's literal copy is stored masked and named; the topic was not replaced; its TopicArn reader redeployed edited"
+
 # --- Phase 4c: the value-named topic again, for the destroy -----------------
 echo "==> Phase 4c: redeploy with NoEchoRenamed's TopicName embedding the NoEcho value"
 if ! DEPLOY_OUT_P4C=$(CDKD_TEST_NOECHO_RENAME=true CDKD_TEST_NOECHO_WITNESS=true env -u CDKD_TEST_NOECHO_SNAPSHOT -u CDKD_TEST_NOECHO_REJECT \
@@ -1928,5 +2134,7 @@ s3_purge_prefix_versions "${STATE_BUCKET}" "${STATE_PREFIX}" all || true
 s3_assert_versions_swept "${STATE_BUCKET}" "${STATE_PREFIX}" "noecho-parameter-masking state teardown"
 s3_purge_prefix_versions "${STATE_BUCKET}" "${CHILD_PREFIX}" all || true
 s3_assert_versions_swept "${STATE_BUCKET}" "${CHILD_PREFIX}" "noecho-parameter-masking SplitChild state teardown"
+s3_purge_prefix_versions "${STATE_BUCKET}" "${VA_PREFIX}" all || true
+s3_assert_versions_swept "${STATE_BUCKET}" "${VA_PREFIX}" "noecho-parameter-masking value-arm state teardown"
 
 echo "[verify] PASS - a NoEcho parameter value is masked on the deploy's provider, error, event, resolver and replacement-line surfaces, and so are its Fn::Split pieces, an Export.Name holding one is refused, state persists *** at every NoEcho position (schema v11), and an unchanged redeploy neither updates nor replaces its readers"

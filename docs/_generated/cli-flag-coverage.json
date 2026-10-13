@@ -2091,6 +2091,7 @@
     "--ids",
     "--if-match",
     "--if-none-match",
+    "--ignore-scripts",
     "--ignore-workspace",
     "--image-id",
     "--image-identifier",
