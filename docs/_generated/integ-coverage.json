@@ -7020,6 +7020,7 @@
         "destroy-interrupt",
         "diff-fail-on-destructive",
         "docdb-neptune",
+        "drift-revert",
         "dynamic-ref-cross-region",
         "elasticache-replicationgroup-getatt",
         "eventbridge",
@@ -7178,6 +7179,9 @@
         ],
         "docdb-neptune": [
           "l2"
+        ],
+        "drift-revert": [
+          "l1"
         ],
         "dynamic-ref-cross-region": [
           "l1"
