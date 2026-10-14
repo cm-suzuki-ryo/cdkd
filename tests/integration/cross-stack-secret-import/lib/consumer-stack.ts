@@ -6,6 +6,8 @@ import {
   CONDITIONAL_EXPORT_NAME,
   EXPORT_NAME,
   PARAMETER_NAME,
+  PROMO_PARAMETER_NAME,
+  PROMO_QUEUE_ARN_EXPORT_NAME,
   QUEUE_URL_EXPORT_NAME,
   REEXPORT_NAME,
   SECRET_NAME,
@@ -112,6 +114,28 @@ export class ConsumerStack extends cdk.Stack {
       },
     });
     policy.overrideLogicalId('ImportedQueuePolicy');
+
+    // go-to-k/cdkd#4852 (steps 11d-11f): an SSM parameter IMPORTING the
+    // producer's PromoQueue ARN. Only under CSSI_PROMO=true, after every
+    // scrub step, so none of their record counts move. CSSI_PROMO_SETTLE=true
+    // edits its Description, so it is written while the producer is unchanged
+    // and records the producer version it read.
+    if (process.env.CSSI_PROMO === 'true') {
+      const promoReader = new ssm.CfnParameter(this, 'PromoImportReader', {
+        name: PROMO_PARAMETER_NAME,
+        type: 'String',
+        value: cdk.Fn.importValue(PROMO_QUEUE_ARN_EXPORT_NAME),
+        // CSSI_PROMO_EDIT=true (step 11e's pinning arm) edits it again after a
+        // rotation the producer has not been redeployed for.
+        description:
+          process.env.CSSI_PROMO_EDIT === 'true'
+            ? 'cdkd integ: promo import reader edited'
+            : process.env.CSSI_PROMO_SETTLE === 'true'
+              ? 'cdkd integ: promo import reader settled'
+              : 'cdkd integ: promo import reader initial',
+      });
+      promoReader.overrideLogicalId('PromoImportReader');
+    }
 
     new cdk.CfnOutput(this, 'ReexportedSecretOutput', {
       value: importedSecret,

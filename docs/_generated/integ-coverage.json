@@ -7166,6 +7166,7 @@
           "l1"
         ],
         "cross-stack-secret-import": [
+          "l1",
           "l2"
         ],
         "custom-resource-getatt-data": [

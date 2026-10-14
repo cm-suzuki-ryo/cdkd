@@ -43,6 +43,7 @@ import { NOT_CONSTRUCTED, constructAttributeForCoreTypes } from './getatt-constr
 import {
   type TokenResolution,
   recordedTokenRoutes,
+  recordedTokenVersions,
   reresolveByRecordedRoutes,
 } from './recorded-reference-routes.js';
 import { constructAttributeForAppTypes } from './getatt-construct-app.js';
@@ -943,7 +944,17 @@ export async function reresolveRecordedReferences(
     servingAsRecordedLine();
     return value;
   }
-  return await this.reresolveCrossStackValue(value, undefined, context, origin, sourceKey);
+  // go-to-k/cdkd#4852 (design §2.2): a record whose provenance gives no region
+  // and no single version (two generations of a create-only token) still names
+  // the versions it holds, which the read route records.
+  const readVersions = recordedTokenVersions(value, record);
+  return await this.reresolveCrossStackValue(
+    value,
+    undefined,
+    readVersions === undefined ? context : { ...context, recordedReadVersions: readVersions },
+    origin,
+    sourceKey
+  );
 }
 
 /**

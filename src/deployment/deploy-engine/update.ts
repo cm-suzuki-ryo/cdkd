@@ -75,6 +75,12 @@ import {
 } from '../masked-property-fingerprints.js';
 import { printNestedStackReadsOnly } from './resolver-context.js';
 import {
+  confirmValueMoves,
+  readProvenanceMovedPaths,
+  sameValueAtVersions,
+  withRefreshedReadVersions,
+} from './read-provenance-moved.js';
+import {
   persistedTokenResolverContext,
   resolveRecordSecrets,
 } from '../masked-baseline-recapture.js';
@@ -807,6 +813,36 @@ export async function provisionUpdate(
   )
     ? redactionRewrittenPaths(resolvedProps, desiredForSkipCheck, comparisonCoordinates)
     : new Set<string>();
+  // State schema v12 (go-to-k/cdkd#4852): the same, across runs. A path
+  // holding a token at a read-derived leaf, served at read-route versions the
+  // record's `readVersions` do not hold, MOVED whatever its reference form
+  // says (an interrupted earlier deploy, a nested child, a cross-stack
+  // consumer, a producer updated in place earlier). OR'd with the #4851 term.
+  // A version move whose VALUE did not move (another key of a JSON secret
+  // rotated) is no move: read at both versions and compared, only for a
+  // reader whose versions moved. Such a reader's `readVersions` are refreshed
+  // if it is skipped, so the next diff does not promote it again.
+  const { moved: provenanceMoved, unchanged: provenanceUnchanged } = await confirmValueMoves(
+    readProvenanceMovedPaths({
+      record: currentResource,
+      templateProperties: desiredProps,
+      desiredRedacted: desiredForSkipCheck,
+      secrets: updateSecrets,
+    }),
+    (entry, recordedVersion, servedVersion) =>
+      sameValueAtVersions(this.resolver, entry, recordedVersion, servedVersion, {
+        template: template!,
+        resources: stateResources,
+      })
+  );
+  for (const path of provenanceMoved.paths) rewrittenPaths.add(path);
+  if (provenanceMoved.paths.size > 0) {
+    // Decision 5: the deploy names why a resource was sent. The ids and the
+    // property names only, never a token or a version.
+    this.logger.info(
+      safeMsg`${logicalId} is sent: ${[...provenanceMoved.paths].sort().join(', ')} read a secret-derived value at a newer version than ${logicalId} was deployed with (its upstream changed since then)`
+    );
+  }
   const recordMatchesDesired =
     movedMasked.size === 0 &&
     rewrittenPaths.size === 0 &&
@@ -821,7 +857,8 @@ export async function provisionUpdate(
       .join(', ');
     this.logger.info(safeMsg`  ↻ ${logicalId} (${resourceType}) attribute update: ${attrSummary}`);
     stateResources[logicalId] = {
-      ...currentResource,
+      // The record as the read-version refresh above may have left it.
+      ...(stateResources[logicalId] ?? currentResource),
       ...this.extractTemplateAttributes(template, logicalId),
     };
     if (counts) counts.updated++;
@@ -979,6 +1016,14 @@ export async function provisionUpdate(
     this.recreateDirectionFor(stackName, logicalId) === undefined &&
     recordMatchesDesired
   ) {
+    // go-to-k/cdkd#4852: a reader whose read versions moved with an equal
+    // value now records the versions it was served (the save persists it).
+    if (provenanceUnchanged.length > 0) {
+      stateResources[logicalId] = withRefreshedReadVersions(
+        stateResources[logicalId] ?? currentResource,
+        provenanceUnchanged
+      );
+    }
     // Attribute-only change (schema v5+): `DeletionPolicy` /
     // `UpdateReplacePolicy` may have flipped without any AWS-side
     // property change. There is no per-resource AWS API for those —
@@ -1375,6 +1420,14 @@ export async function provisionUpdate(
         properties,
         ...(remaining.length > 0 && { noEchoLeaves: remaining.map((c) => [...c]) }),
       };
+    }
+    // go-to-k/cdkd#4852: as on the first skip, an equal-value version move
+    // refreshes the read versions, so the next diff does not promote again.
+    if (provenanceUnchanged.length > 0) {
+      stateResources[logicalId] = withRefreshedReadVersions(
+        stateResources[logicalId] ?? currentResource,
+        provenanceUnchanged
+      );
     }
     // Nothing was attempted, as on the skip above the refusal.
     this.attemptedResolvedProps.delete(logicalId);
