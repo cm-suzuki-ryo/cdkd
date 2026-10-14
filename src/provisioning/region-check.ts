@@ -166,8 +166,9 @@ export interface DeleteContext extends SecretMaskingContext {
   deletionPolicy?: string | undefined;
 
   /**
-   * Set by a top-level or cascading DESTROY (`cdkd destroy` / `cdkd state
-   * destroy`), which vouches that nothing else in its run can have attached
+   * Set by a DESTROY (`cdkd destroy` / `cdkd state destroy`: a top-level
+   * stack, a cascading nested child, or one destroyed alone), which vouches
+   * that nothing else in its run can have attached
    * the same inline policy name or group membership to the principals this
    * record names (go-to-k/cdkd#4150). The `AWS::IAM::Policy` and
    * `AWS::IAM::UserToGroupAddition` deletes then resolve a principal list
@@ -190,10 +191,16 @@ export interface DeleteContext extends SecretMaskingContext {
    * `recordedRegions` is the deleted record's v12 provenance
    * (`recordedReferenceRegions`, go-to-k/cdkd#4879): a region-less reference
    * it places in a region resolves there instead of reading as `ambiguous`.
+   *
+   * `producerRegionsIncomplete` marks `importedProducerRegions` as missing an
+   * ancestor's regions (a nested child destroyed on its own,
+   * go-to-k/cdkd#4887): a region-less reference without a recorded region is
+   * then never resolved, as it may be the parent's.
    */
   resolveSecretDerivedPrincipals?:
     | {
         importedProducerRegions: readonly string[];
+        producerRegionsIncomplete?: boolean;
         retryMemo?: SecretPrincipalRetryMemo;
         recordedRegions?: ReadonlyMap<string, string>;
       }
