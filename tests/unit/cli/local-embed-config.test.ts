@@ -95,9 +95,16 @@ describe('cdkd local embed-config branding', () => {
       const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const before = getLogger().getLevel();
       try {
+        // The suppression branch is reached only on a fallback; a re-entry
+        // (a debug line logged while an info line is being forwarded) is one.
         getLogger().setLevel('info');
-        host.debug('withheld detail', 1n);
+        const inner = vi.spyOn(getLogger(), 'info').mockImplementation(() => {
+          host.debug('withheld detail');
+        });
+        host.info('outer');
+        expect(inner).toHaveBeenCalledTimes(1);
         expect(err).not.toHaveBeenCalled();
+        inner.mockRestore();
         getLogger().setLevel('debug');
         host.debug('withheld detail', { secret: 'ARG-SENTINEL' }, 1n);
         const said = err.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
