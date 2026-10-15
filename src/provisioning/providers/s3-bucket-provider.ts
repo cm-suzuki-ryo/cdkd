@@ -8124,8 +8124,8 @@ export class S3BucketProvider implements ResourceProvider {
             // The capture maps this to "no baseline" without a word, so a lag
             // past the retry window would otherwise be invisible.
             this.logger.debug(
-              `HeadBucket still answered 404 after ${headAttempts} attempts right after cdkd's own write; ` +
-                `no observed baseline is captured for ${displaySafe(logicalId)}`
+              safeMsg`HeadBucket still answered 404 after ${String(headAttempts)} attempts right after cdkd's own write; ` +
+                safeMsg`no observed baseline is captured for ${displaySafe(logicalId)}`
             );
           }
           return RESOURCE_NOT_FOUND;
