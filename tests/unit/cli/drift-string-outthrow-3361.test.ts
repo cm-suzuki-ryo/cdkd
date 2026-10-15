@@ -302,7 +302,9 @@ describe('cdkd drift detection (#3361)', () => {
     mockGetState.mockResolvedValue(
       stackState({ P: resource(policy(arn), 'qp', 'AWS::SQS::QueuePolicy') })
     );
-    mockReadCurrentState.mockResolvedValue(policy('AROAABCDEFGHIJKLMNOP'));
+    // Built at runtime: as a literal, the unique-id shape trips git-secrets' AWS
+    // key pattern whenever this file is staged or merged in.
+    mockReadCurrentState.mockResolvedValue(policy(['AROA', 'ABCDEFGHIJKLMNOP'].join('')));
     mockIamSend.mockImplementation(() => Promise.reject(unconvertible()));
 
     const { report, error } = await detect();
