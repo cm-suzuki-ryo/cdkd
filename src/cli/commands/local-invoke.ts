@@ -94,7 +94,7 @@ import { createLocalInvokeAgentCoreCommand } from './local-invoke-agentcore.js';
 import { createLocalStartAgentCoreCommand } from './local-start-agentcore.js';
 import { createLocalStartAlbCommand } from './local-start-alb.js';
 import { createLocalStartCloudFrontCommand } from './local-start-cloudfront.js';
-import { setEmbedConfig } from 'cdk-local';
+import { setEmbedConfig, type EmbedHostLogger } from 'cdk-local';
 import {
   type DynamicReferenceResolver,
   firstUsableRegion,
@@ -119,6 +119,27 @@ import {
  * `cdkl` defaults in error strings / resource names. `createLocalCommand`
  * calls `setEmbedConfig(CDKD_EMBED_CONFIG)` once so they read cdkd's branding.
  */
+/**
+ * cdk-local's own log lines, routed through cdkd's logger (go-to-k/cdkd#2429).
+ * cdk-local ships a second `ConsoleLogger` whose `info` goes to stdout through
+ * module state cdkd cannot reach, so without this a container-image
+ * `cdkd local invoke ... | jq` got `Building container image ...` mixed into
+ * the payload, and cdkd's `--verbose` never raised cdk-local's level (its
+ * "logged at debug level under --verbose" pointers led nowhere). Each call
+ * reads `getLogger()` at call time, so a later `setLogger` still applies; the
+ * stdout reservation, level filter, sanitization and formatting are then
+ * cdkd's. A `cdkd local studio` child sets `CDKL_LOG_LEVEL` / `CDKL_LOG_STREAM`,
+ * under which cdk-local keeps its own logger by design.
+ */
+const CDKD_LOCAL_HOST_LOGGER: EmbedHostLogger = {
+  debug: (message, ...args) => getLogger().debug(message, ...args),
+  info: (message, ...args) => getLogger().info(message, ...args),
+  warn: (message, ...args) => getLogger().warn(message, ...args),
+  error: (message, ...args) => getLogger().error(message, ...args),
+  setLevel: (level) => getLogger().setLevel(level),
+  getLevel: () => getLogger().getLevel(),
+};
+
 const CDKD_EMBED_CONFIG = {
   cliName: 'cdkd local',
   binaryName: 'cdkd',
@@ -134,6 +155,9 @@ const CDKD_EMBED_CONFIG = {
   // for the resolution history.
   sigV4StrictByDefault: false,
   sigV4OptFlag: '--strict-sigv4',
+  // Every factory cdkd hands an `embedConfig` passes `getEmbedConfig()`, which
+  // returns this logger too, so no later `setEmbedConfig` drops it.
+  logger: CDKD_LOCAL_HOST_LOGGER,
 } as const;
 
 interface LocalInvokeOptions {
@@ -278,19 +302,14 @@ async function localInvokeCommand(target: string, options: LocalInvokeOptions): 
   // `cdkd local invoke MyStack/Fn | jq` corrupts on a DEFAULT run. `sam local
   // invoke` routes its status lines to stderr for exactly this reason.
   //
-  // Lines are MOVED, not suppressed. ONE mechanism this does NOT reach, a
-  // raw write that never passes through cdkd's logger — so a consumer piping
-  // this command still needs `| tail -1` for a BUILT image today:
-  // **cdk-local's own `ConsoleLogger`**, a SECOND logger module with its own
-  // state and no reservation concept — every shim under `src/local/` that
-  // re-exports cdk-local (`buildContainerImage`, `buildAgentCoreCodeImage`,
-  // `downloadAndExtractS3Bundle`) emits its `logger.info` straight to
-  // `console.info` ([#2429](https://github.com/go-to-k/cdkd/issues/2429)).
-  // This is why a container-image Lambda still prints `Building container
-  // image (platform=...)` on stdout.
-  //
-  // Two raw writers used to be listed here and are now CLOSED, both by
-  // consulting this reservation: `docker pull` progress under
+  // Lines are MOVED, not suppressed. Three writers that bypass cdkd's own
+  // call sites are CLOSED by this same reservation. cdk-local's OWN
+  // `ConsoleLogger` (the `Building container image (platform=...)` line every
+  // re-exported shim such as `buildContainerImage` / `buildAgentCoreCodeImage`
+  // / `downloadAndExtractS3Bundle` emits) hands each line to cdkd's logger
+  // through the embed config `createLocalCommand` installs
+  // ([#2429](https://github.com/go-to-k/cdkd/issues/2429)), and two raw
+  // writers consult the reservation directly: `docker pull` progress under
   // `runDockerForeground` (`docker-cmd.ts` redirects that child's fd 1 to
   // fd 2), and the CONTAINER's own stdout, piped in by `followContainerLogs`
   // (`src/local/docker-runner.ts`), where the RIE puts START/END/REPORT and

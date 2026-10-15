@@ -110,36 +110,47 @@ echo "${RESULT_3}" | grep -q '"greeting":"overridden"' || {
 
 # Test 4 — --no-build (closes #233): the previous tests already built the
 # image under the deterministic local tag, so a 4th invocation with
-# --no-build should skip the rebuild and reuse the cached tag. We capture
-# combined stdout+stderr to inspect the build-vs-skip log lines, and rely on
-# the JSON response always being on the LAST stdout line for the greeting
-# check. Note WHICH stream each of those is, because the two halves differ
-# since issue go-to-k/cdkd#2410: cdkd's OWN logger now writes to stderr
-# (stdout is reserved for the response payload), but the two lines grepped
-# below -- `Skipping docker build` / `Building container image` -- come from
-# CDK-LOCAL's logger via the `buildContainerImage` shim, which has its own
-# module state and no reservation, so they are still on STDOUT
-# (go-to-k/cdkd#2429). The combined capture is what makes this test
-# indifferent to that split.
+# --no-build should skip the rebuild and reuse the cached tag. stdout and
+# stderr are captured SEPARATELY: the build-vs-skip lines
+# (`Skipping docker build` / `Building container image`) come from
+# cdk-local's own logger via the `buildContainerImage` shim, which cdkd routes
+# through its own logger, so under the payload reservation they land on
+# STDERR and stdout carries the response alone (go-to-k/cdkd#2429).
 echo "==> [4/4] Invoking EchoHandler with --no-build (image must already be cached from steps 1-3)"
-COMBINED_4=$(mktemp)
-trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${COMBINED_4}"' EXIT
-${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull --no-build >"${COMBINED_4}" 2>&1
-RESULT_4=$(tail -1 "${COMBINED_4}")
+STDOUT_4=$(mktemp)
+STDERR_4=$(mktemp)
+trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${STDOUT_4}" "${STDERR_4}"' EXIT
+${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull --no-build >"${STDOUT_4}" 2>"${STDERR_4}"
+RESULT_4=$(cat "${STDOUT_4}")
 echo "    response: ${RESULT_4}"
+# stdout purity (go-to-k/cdkd#2429): EXACTLY one JSON document, nothing else.
+# Before the fix, the `Skipping docker build` line sat on stdout above the
+# response, so this parse fails on it.
+node -e '
+  const text = require("fs").readFileSync(process.argv[1], "utf8").trim();
+  const lines = text.split("\n");
+  if (lines.length !== 1) { console.error(`stdout has ${lines.length} lines, expected 1`); process.exit(1); }
+  JSON.parse(text);
+' "${STDOUT_4}" || {
+  echo "FAIL: stdout is not exactly one JSON document (go-to-k/cdkd#2429). stdout was:"
+  cat "${STDOUT_4}"
+  echo "stderr was:"
+  cat "${STDERR_4}"
+  exit 1
+}
 echo "${RESULT_4}" | grep -q '"greeting":"hello"' || {
   echo "FAIL: expected greeting=hello (--no-build response), got: ${RESULT_4}"
-  cat "${COMBINED_4}"
+  cat "${STDERR_4}"
   exit 1
 }
-grep -q "Skipping docker build" "${COMBINED_4}" || {
-  echo "FAIL: --no-build did not log 'Skipping docker build' marker. Combined output was:"
-  cat "${COMBINED_4}"
+grep -q "Skipping docker build" "${STDERR_4}" || {
+  echo "FAIL: --no-build did not log 'Skipping docker build' on stderr. stdout / stderr were:"
+  cat "${STDOUT_4}" "${STDERR_4}"
   exit 1
 }
-if grep -q "Building container image" "${COMBINED_4}"; then
-  echo "FAIL: --no-build still logged 'Building container image' (rebuild happened despite --no-build). Combined output was:"
-  cat "${COMBINED_4}"
+if grep -q "Building container image" "${STDOUT_4}" "${STDERR_4}"; then
+  echo "FAIL: --no-build still logged 'Building container image' (rebuild happened despite --no-build). stdout / stderr were:"
+  cat "${STDOUT_4}" "${STDERR_4}"
   exit 1
 fi
 

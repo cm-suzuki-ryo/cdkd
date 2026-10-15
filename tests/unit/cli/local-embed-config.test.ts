@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 import { getEmbedConfig, resetEmbedConfig } from 'cdk-local';
 import { createLocalCommand } from '../../../src/cli/commands/local-invoke.js';
+import { getLogger } from '../../../src/utils/logger.js';
 
 // Verifies that building the `cdkd local` command tree installs cdkd's
 // branding into cdk-local's process-wide embed-config, so the re-export
@@ -24,6 +25,7 @@ describe('cdkd local embed-config branding', () => {
     resetEmbedConfig();
     createLocalCommand();
     expect(getEmbedConfig()).toEqual({
+      logger: expect.any(Object),
       cliName: 'cdkd local',
       binaryName: 'cdkd',
       productName: 'cdkd',
@@ -37,5 +39,27 @@ describe('cdkd local embed-config branding', () => {
       sigV4StrictByDefault: false,
       sigV4OptFlag: '--strict-sigv4',
     });
+  });
+
+  it("routes cdk-local's own log lines through cdkd's logger (go-to-k/cdkd#2429)", () => {
+    resetEmbedConfig();
+    createLocalCommand();
+    const host = getEmbedConfig().logger;
+    expect(host).toBeDefined();
+    const info = vi.spyOn(getLogger(), 'info').mockImplementation(() => undefined);
+    const setLevel = vi.spyOn(getLogger(), 'setLevel');
+    const before = getLogger().getLevel();
+    try {
+      host!.info('Building container image (platform=linux/amd64)...');
+      expect(info).toHaveBeenCalledWith('Building container image (platform=linux/amd64)...');
+      // cdk-local's `--verbose` level raise reaches cdkd's logger, and its level
+      // reads come back from it.
+      host!.setLevel('debug');
+      expect(setLevel).toHaveBeenCalledWith('debug');
+      expect(host!.getLevel()).toBe('debug');
+    } finally {
+      getLogger().setLevel(before);
+      vi.restoreAllMocks();
+    }
   });
 });
