@@ -42,12 +42,11 @@ cdkd local invoke-agentcore MyStack/MyAgent --event prompt.json
 
 cdkd builds the image and starts the container. It waits until the agent
 answers `GET /ping` as ready, then sends the file as the body of
-`POST /invocations`. Progress and the agent's log lines go to stderr, and the
-agent's response is the last line on stdout. This prints the response alone:
+`POST /invocations`. Progress and the agent's log lines go to stderr, and
+stdout carries the agent's response alone:
 
 ```bash
-cdkd local invoke-agentcore MyStack/MyAgent -e prompt.json 2> progress.log \
-  | tail -1
+cdkd local invoke-agentcore MyStack/MyAgent -e prompt.json 2> progress.log
 ```
 
 More invocations:

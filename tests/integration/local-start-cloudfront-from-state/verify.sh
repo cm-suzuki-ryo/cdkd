@@ -121,7 +121,7 @@ ${CDKD} deploy "${STACK_NAME}" \
 DEPLOYED=1
 
 ORIGIN_BUCKET="$(${CDKD} state resources "${STACK_NAME}" --state-bucket "${STATE_BUCKET}" --json \
-  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);for(const r of j){if(r.resourceType==="AWS::S3::Bucket"){console.log(r.physicalId);process.exit(0)}}process.exit(1)})')"
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);for(const r of j){if(r.resourceType==="AWS::S3::Bucket"){console.log(r.physicalId);process.exit(0)}}process.exit(1)})')" || true
 [[ -n "${ORIGIN_BUCKET}" ]] || { echo "FAIL: could not read the deployed origin bucket from cdkd state"; exit 1; }
 echo "    deployed origin bucket: ${ORIGIN_BUCKET}"
 
@@ -131,8 +131,9 @@ aws s3 cp "${WORK_DIR}/expected.bin" "s3://${ORIGIN_BUCKET}/${OBJECT_KEY}" --reg
 
 echo "==> [1/2] Negative control: no state source -> the unresolved origin answers 502"
 boot "${WORK_DIR}/no-state.log"
-CODE="$(curl --silent --show-error --max-time 10 -o "${WORK_DIR}/no-state.body" -w '%{http_code}' "${URL}/${OBJECT_KEY}")"
+CODE="$(curl --silent --show-error --max-time 10 -o "${WORK_DIR}/no-state.body" -w '%{http_code}' "${URL}/${OBJECT_KEY}")" || true
 stop_server
+# A transport failure leaves curl's `-w` at 000, so the branch below prints the log.
 if [[ "${CODE}" != "502" ]]; then
   echo "FAIL: without a state source expected 502 for the unresolved S3 origin, got ${CODE}. Output:"
   cat "${WORK_DIR}/no-state.log"
@@ -142,7 +143,7 @@ echo "    OK: 502 without a state source"
 
 echo "==> [2/2] --from-state: the origin is served from the deployed bucket"
 boot "${WORK_DIR}/from-state.log" --from-state --state-bucket "${STATE_BUCKET}" --stack-region "${REGION}"
-CODE="$(curl --silent --show-error --max-time 30 -o "${WORK_DIR}/got.bin" -w '%{http_code}' "${URL}/${OBJECT_KEY}")"
+CODE="$(curl --silent --show-error --max-time 30 -o "${WORK_DIR}/got.bin" -w '%{http_code}' "${URL}/${OBJECT_KEY}")" || true
 stop_server
 if [[ "${CODE}" != "200" ]]; then
   echo "FAIL: --from-state expected 200 for ${OBJECT_KEY}, got ${CODE}. Output:"
