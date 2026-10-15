@@ -105,7 +105,7 @@ ${CDKD} synth >/dev/null
 # default; --no-pull on the container-Lambda local-build path is
 # documented as a no-op in CLI help — it still skips the public-base
 # image's `docker pull` from the ZIP path which we did up front).
-echo "==> [1/4] Invoking EchoHandler (container) with default empty event"
+echo "==> [1/5] Invoking EchoHandler (container) with default empty event"
 RESULT_1=$(capture ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull)
 echo "    response: ${RESULT_1}"
 echo "${RESULT_1}" | grep -q '"greeting":"hello"' || {
@@ -120,7 +120,7 @@ echo "${RESULT_1}" | grep -q '"fromContainer":true' || {
 # Test 1b — a DEFAULT (building) invoke keeps stdout to the payload alone
 # (go-to-k/cdkd#2429's headline case): `Building container image ...` is on
 # stderr, and stdout is exactly one JSON document.
-echo "==> [1b/4] Invoking EchoHandler (container build) with stdout and stderr split"
+echo "==> [1b/5] Invoking EchoHandler (container build) with stdout and stderr split"
 STDOUT_1B=$(mktemp)
 STDERR_1B=$(mktemp)
 trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}"' EXIT
@@ -133,7 +133,7 @@ grep -q "Building container image" "${STDERR_1B}" || {
 }
 
 # Test 2 — event payload via --event
-echo "==> [2/4] Invoking EchoHandler with --event payload"
+echo "==> [2/5] Invoking EchoHandler with --event payload"
 EVENT_FILE=$(mktemp)
 trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}" "${EVENT_FILE}"' EXIT
 echo '{"key":"value","n":42}' > "${EVENT_FILE}"
@@ -145,7 +145,7 @@ echo "${RESULT_2}" | grep -q '"key":"value"' || {
 }
 
 # Test 3 — --env-vars override
-echo "==> [3/4] Invoking EchoHandler with --env-vars override"
+echo "==> [3/5] Invoking EchoHandler with --env-vars override"
 ENV_FILE=$(mktemp)
 trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}" "${EVENT_FILE}" "${ENV_FILE}"' EXIT
 echo '{"Parameters":{"GREETING":"overridden"}}' > "${ENV_FILE}"
@@ -164,7 +164,7 @@ echo "${RESULT_3}" | grep -q '"greeting":"overridden"' || {
 # cdk-local's own logger via the `buildContainerImage` shim, which cdkd routes
 # through its own logger, so under the payload reservation they land on
 # STDERR and stdout carries the response alone (go-to-k/cdkd#2429).
-echo "==> [4/4] Invoking EchoHandler with --no-build (image must already be cached from steps 1-3)"
+echo "==> [4/5] Invoking EchoHandler with --no-build (image must already be cached from steps 1-3)"
 STDOUT_4=$(mktemp)
 STDERR_4=$(mktemp)
 trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${STDOUT_1B}" "${STDERR_1B}" "${STDOUT_4}" "${STDERR_4}"' EXIT
@@ -188,5 +188,26 @@ if grep -q "Building container image" "${STDOUT_4}" "${STDERR_4}"; then
   exit 1
 fi
 
+# Test 5 — a `--verbose` build never prints a build-arg VALUE
+# (go-to-k/cdkd#4967). The stack passes an obviously fake sentinel as a build
+# arg. Both polarities: the build line IS logged with the key and the `***`
+# marker, so the absence below cannot pass because nothing was logged.
+echo "==> [5/5] --verbose container build masks the sentinel build-arg value"
+SENTINEL="FAKE-SENTINEL-NOT-A-SECRET-7f1e"
+STDOUT_5=$(mktemp)
+STDERR_5=$(mktemp)
+trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${STDOUT_1B}" "${STDERR_1B}" "${STDOUT_4}" "${STDERR_4}" "${STDOUT_5}" "${STDERR_5}"' EXIT
+invoke_split "${STDOUT_5}" "${STDERR_5}" ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull --verbose
+grep -qF -- "--build-arg CDKD_SENTINEL_ARG=***" "${STDERR_5}" || {
+  echo "FAIL: the --verbose build line with the masked build arg was not logged. stderr was:"
+  cat "${STDERR_5}"
+  exit 1
+}
+if grep -qF "${SENTINEL}" "${STDOUT_5}" "${STDERR_5}"; then
+  echo "FAIL: the sentinel build-arg value reached the --verbose output (go-to-k/cdkd#4967)"
+  grep -nF "${SENTINEL}" "${STDOUT_5}" "${STDERR_5}"
+  exit 1
+fi
+
 echo ""
-echo "==> All 4 local-invoke container-Lambda tests passed"
+echo "==> All 5 local-invoke container-Lambda tests passed"

@@ -62,4 +62,49 @@ describe('cdkd local embed-config branding', () => {
       vi.restoreAllMocks();
     }
   });
+
+  describe('bridge fallback (go-to-k/cdkd#4967 security review)', () => {
+    it("falls back to stderr, display-safe, when cdkd's logger throws on an arg", () => {
+      resetEmbedConfig();
+      createLocalCommand();
+      const host = getEmbedConfig().logger!;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const circular: Record<string, unknown> = {};
+      circular['self'] = circular;
+      try {
+        expect(() => host.info('line with a BigInt arg\u001b[2K', 1n)).not.toThrow();
+        expect(() => host.warn('line with a circular arg', circular)).not.toThrow();
+        const said = err.mock.calls.map((c) => String(c[0]));
+        expect(said.some((l) => l.startsWith('line with a BigInt arg'))).toBe(true);
+        expect(said.join('\n')).not.toContain('\u001b');
+        expect(said.some((l) => l.includes('line with a circular arg'))).toBe(true);
+        // Never cdk-local's own console path, which writes info to stdout.
+        expect(info).not.toHaveBeenCalled();
+        expect(out).not.toHaveBeenCalled();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('does not recurse when a line re-enters the bridge', () => {
+      resetEmbedConfig();
+      createLocalCommand();
+      const host = getEmbedConfig().logger!;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      // cdkd's logger calling back into the bridge (e.g. a sink that logs
+      // through cdk-local): the inner call must not forward again.
+      const inner = vi.spyOn(getLogger(), 'info').mockImplementation((m: string) => {
+        host.info(`inner: ${m}`);
+      });
+      try {
+        expect(() => host.info('outer')).not.toThrow();
+        expect(inner).toHaveBeenCalledTimes(1);
+        expect(err.mock.calls.map((c) => String(c[0]))).toContain('inner: outer');
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  });
 });

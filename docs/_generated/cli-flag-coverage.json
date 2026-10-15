@@ -1694,6 +1694,7 @@
         "lambda-url-authtype-replay",
         "local-invoke",
         "local-invoke-agentcore-from-state",
+        "local-invoke-container",
         "local-invoke-from-state",
         "local-start-alb-from-state",
         "local-start-cloudfront-from-state",

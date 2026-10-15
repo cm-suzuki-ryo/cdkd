@@ -14,7 +14,12 @@ import {
 } from '../options.js';
 import { getLogger, reserveStdoutForPayload } from '../../utils/logger.js';
 import { describeLocalAwsFailureForWarn } from '../../utils/local-aws-failure.js';
-import { displayIdent, ROLE_ARN_MAX_CODE_POINTS, safeMsg } from '../../utils/display-safe.js';
+import {
+  displayIdent,
+  ROLE_ARN_MAX_CODE_POINTS,
+  safeMsg,
+  terminalSafe,
+} from '../../utils/display-safe.js';
 import { quotedOrDescribed, shellBoundedDisplay } from '../../utils/pasteable-command.js';
 import {
   displayAssemblyPath,
@@ -124,11 +129,40 @@ import {
  * a user who exported either for standalone `cdkl` gets cdk-local's own
  * console logger back, stdout included.
  */
+/** True while a line is being handed to cdkd's logger (re-entry guard). */
+let hostLoggerForwarding = false;
+
+/**
+ * Hand one cdk-local line to cdkd's logger. A throw there (a `BigInt` or a
+ * circular arg its `JSON.stringify` cannot render) or a re-entry falls back
+ * to stderr, display-safe, with the args dropped. Never cdk-local's own
+ * console path, which would put an `info` line on the reserved stdout.
+ */
+function forwardToCdkdLogger(
+  level: 'debug' | 'info' | 'warn' | 'error',
+  message: string,
+  args: unknown[]
+): void {
+  if (!hostLoggerForwarding) {
+    hostLoggerForwarding = true;
+    try {
+      getLogger()[level](message, ...args);
+      return;
+    } catch {
+      // fall through to the stderr fallback
+    } finally {
+      hostLoggerForwarding = false;
+    }
+  }
+  if (level === 'debug' && getLogger().getLevel() !== 'debug') return;
+  console.error(terminalSafe(String(message)));
+}
+
 const CDKD_LOCAL_HOST_LOGGER: EmbedHostLogger = {
-  debug: (message, ...args) => getLogger().debug(message, ...args),
-  info: (message, ...args) => getLogger().info(message, ...args),
-  warn: (message, ...args) => getLogger().warn(message, ...args),
-  error: (message, ...args) => getLogger().error(message, ...args),
+  debug: (message, ...args) => forwardToCdkdLogger('debug', message, args),
+  info: (message, ...args) => forwardToCdkdLogger('info', message, args),
+  warn: (message, ...args) => forwardToCdkdLogger('warn', message, args),
+  error: (message, ...args) => forwardToCdkdLogger('error', message, args),
   setLevel: (level) => getLogger().setLevel(level),
   getLevel: () => getLogger().getLevel(),
 };
