@@ -87,8 +87,18 @@ describe('the strategy `cdkd local start-alb` hands the engine', () => {
   it('adds no Lambda-target carve-out warning under --from-state (#2602)', async () => {
     const strategy = await strategyHandedToEngine(['My/Alb', '--from-state']);
     // The ALB fixture has BOTH an ECS service target and a Lambda target group.
-    const { warnings, frontDoor } = strategy.resolveBoots(stacks as never, ['Alb16C2F182']);
-    expect(frontDoor).toBeDefined();
+    const { warnings, frontDoor, boots } = strategy.resolveBoots(stacks as never, ['Alb16C2F182']);
+    // Premise: the plan really carries the Lambda target and the ECS boot, so
+    // the absence below is not vacuous.
+    const lambdaIds = frontDoor!.listeners.flatMap((l) =>
+      [l.defaultAction, ...l.rules.map((r) => r.action)].flatMap((a) =>
+        a?.kind === 'forward'
+          ? a.targets.flatMap((t) => (t.kind === 'lambda' ? [t.lambda.logicalId] : []))
+          : []
+      )
+    );
+    expect(lambdaIds).toContain('ApiFnE0725F78');
+    expect(boots).toHaveLength(1);
     expect(warnings.join('\n')).not.toContain('does not reach the container environment');
   });
 });

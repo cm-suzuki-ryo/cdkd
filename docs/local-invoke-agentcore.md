@@ -355,12 +355,12 @@ cdkd reloads in one of two ways:
 stdout carries the agent's response. cdkd's own log lines and the agent
 container's output go to stderr.
 
-There is one complication. When cdkd builds the agent's image, the build's
-progress lines also reach stdout. The response is still the last line, so take
-that line:
+When cdkd builds the agent's image, the build's progress lines go to stderr
+too, unless `CDKL_LOG_LEVEL` or `CDKL_LOG_STREAM` is exported, in which case
+the bundled engine prints them on stdout ahead of the response.
 
 ```bash
-cdkd local invoke-agentcore MyStack/MyAgent 2> progress.log | tail -1
+cdkd local invoke-agentcore MyStack/MyAgent 2> progress.log
 ```
 
 `progress.log` then holds cdkd's log lines and whatever the agent printed.

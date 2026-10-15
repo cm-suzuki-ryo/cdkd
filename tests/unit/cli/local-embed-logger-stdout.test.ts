@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resetEmbedConfig } from 'cdk-local';
@@ -17,7 +17,9 @@ import {
 // embed config. Nothing at the shim boundary is mocked: the line is produced
 // by cdk-local's own logger module.
 describe("cdk-local's own log lines under cdkd's stdout reservation", () => {
+  const dirs: string[] = [];
   afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
     releaseStdoutForPayload();
     resetEmbedConfig();
     vi.restoreAllMocks();
@@ -32,6 +34,7 @@ describe("cdk-local's own log lines under cdkd's stdout reservation", () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const cdkOut = mkdtempSync(join(tmpdir(), 'cdkd-2429-'));
+    dirs.push(cdkOut);
     // `--no-build` logs its progress line and then looks the tag up; the
     // lookup's outcome (no Docker on the host, or no such image) is not under
     // test.

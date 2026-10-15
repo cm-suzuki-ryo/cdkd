@@ -659,9 +659,11 @@ describe('the four engine commands install the warning', () => {
     await cmd.parseAsync(['--role-arn', 'arn:aws:iam::222222222222:role/deploy', '--from-state'], {
       from: 'user',
     });
-    expect(
-      warned('start-cloudfront').some((w) => w.includes('--from-state makes the engine read'))
-    ).toBe(true);
+    const said = warned('start-cloudfront').join('\n');
+    expect(said).toContain('--from-state makes the engine read');
+    // The Function URL / Lambda@Edge env resolves ${AWS::AccountId} through the
+    // engine's own STS client, i.e. as the role.
+    expect(said).toContain("${AWS::AccountId} in the Function URL / Lambda@Edge environment resolves to the role's account");
   });
 
   it('start-service: warns under CDKD_ROLE_ARN with no profile', async () => {

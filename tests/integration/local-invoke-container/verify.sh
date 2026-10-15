@@ -53,6 +53,39 @@ capture() {
   rm -f "${err}"
   printf '%s\n' "${out}" | tail -1
 }
+# --- stdout purity (go-to-k/cdkd#2429) ------------------------------------
+# `invoke_split <stdout-file> <stderr-file> <cmd...>` runs an invoke with the
+# two streams captured SEPARATELY; on a non-zero exit it prints both and fails
+# here, before the trap removes them. `assert_one_json <stdout-file>
+# <stderr-file>` then requires stdout to be EXACTLY one JSON document: before
+# the fix, cdk-local's `Building container image ...` / `Skipping docker
+# build ...` line sat on stdout above the response, a second line.
+invoke_split() {
+  local out_file="$1" err_file="$2" rc=0
+  shift 2
+  "$@" >"${out_file}" 2>"${err_file}" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "FAIL: command exited ${rc}: $*"
+    echo "stdout was:"; cat "${out_file}"
+    echo "stderr was:"; cat "${err_file}"
+    exit 1
+  fi
+}
+assert_one_json() {
+  node -e '
+    const text = require("fs").readFileSync(process.argv[1], "utf8").trim();
+    const lines = text.split("\n");
+    if (lines.length !== 1) { console.error(`stdout has ${lines.length} lines, expected 1`); process.exit(1); }
+    JSON.parse(text);
+  ' "$1" || {
+    echo "FAIL: stdout is not exactly one JSON document (go-to-k/cdkd#2429). stdout was:"
+    cat "$1"
+    echo "stderr was:"
+    cat "$2"
+    exit 1
+  }
+}
+
 echo "==> Verifying Docker is available"
 docker version --format '{{.Server.Version}}' >/dev/null
 
@@ -84,10 +117,25 @@ echo "${RESULT_1}" | grep -q '"fromContainer":true' || {
   exit 1
 }
 
+# Test 1b — a DEFAULT (building) invoke keeps stdout to the payload alone
+# (go-to-k/cdkd#2429's headline case): `Building container image ...` is on
+# stderr, and stdout is exactly one JSON document.
+echo "==> [1b/4] Invoking EchoHandler (container build) with stdout and stderr split"
+STDOUT_1B=$(mktemp)
+STDERR_1B=$(mktemp)
+trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}"' EXIT
+invoke_split "${STDOUT_1B}" "${STDERR_1B}" ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull
+assert_one_json "${STDOUT_1B}" "${STDERR_1B}"
+grep -q "Building container image" "${STDERR_1B}" || {
+  echo "FAIL: the build did not log 'Building container image' on stderr. stdout / stderr were:"
+  cat "${STDOUT_1B}" "${STDERR_1B}"
+  exit 1
+}
+
 # Test 2 — event payload via --event
 echo "==> [2/4] Invoking EchoHandler with --event payload"
 EVENT_FILE=$(mktemp)
-trap 'rm -f "${EVENT_FILE}"' EXIT
+trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}" "${EVENT_FILE}"' EXIT
 echo '{"key":"value","n":42}' > "${EVENT_FILE}"
 RESULT_2=$(capture ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --event "${EVENT_FILE}" --no-pull)
 echo "    response: ${RESULT_2}"
@@ -99,7 +147,7 @@ echo "${RESULT_2}" | grep -q '"key":"value"' || {
 # Test 3 — --env-vars override
 echo "==> [3/4] Invoking EchoHandler with --env-vars override"
 ENV_FILE=$(mktemp)
-trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}"' EXIT
+trap 'rm -f "${STDOUT_1B}" "${STDERR_1B}" "${EVENT_FILE}" "${ENV_FILE}"' EXIT
 echo '{"Parameters":{"GREETING":"overridden"}}' > "${ENV_FILE}"
 RESULT_3=$(capture ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --env-vars "${ENV_FILE}" --no-pull)
 echo "    response: ${RESULT_3}"
@@ -119,25 +167,11 @@ echo "${RESULT_3}" | grep -q '"greeting":"overridden"' || {
 echo "==> [4/4] Invoking EchoHandler with --no-build (image must already be cached from steps 1-3)"
 STDOUT_4=$(mktemp)
 STDERR_4=$(mktemp)
-trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${STDOUT_4}" "${STDERR_4}"' EXIT
-${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull --no-build >"${STDOUT_4}" 2>"${STDERR_4}"
+trap 'rm -f "${EVENT_FILE}" "${ENV_FILE}" "${STDOUT_1B}" "${STDERR_1B}" "${STDOUT_4}" "${STDERR_4}"' EXIT
+invoke_split "${STDOUT_4}" "${STDERR_4}" ${CDKD} local invoke CdkdLocalInvokeContainerFixture/EchoHandler --no-pull --no-build
 RESULT_4=$(cat "${STDOUT_4}")
 echo "    response: ${RESULT_4}"
-# stdout purity (go-to-k/cdkd#2429): EXACTLY one JSON document, nothing else.
-# Before the fix, the `Skipping docker build` line sat on stdout above the
-# response, so this parse fails on it.
-node -e '
-  const text = require("fs").readFileSync(process.argv[1], "utf8").trim();
-  const lines = text.split("\n");
-  if (lines.length !== 1) { console.error(`stdout has ${lines.length} lines, expected 1`); process.exit(1); }
-  JSON.parse(text);
-' "${STDOUT_4}" || {
-  echo "FAIL: stdout is not exactly one JSON document (go-to-k/cdkd#2429). stdout was:"
-  cat "${STDOUT_4}"
-  echo "stderr was:"
-  cat "${STDERR_4}"
-  exit 1
-}
+assert_one_json "${STDOUT_4}" "${STDERR_4}"
 echo "${RESULT_4}" | grep -q '"greeting":"hello"' || {
   echo "FAIL: expected greeting=hello (--no-build response), got: ${RESULT_4}"
   cat "${STDERR_4}"

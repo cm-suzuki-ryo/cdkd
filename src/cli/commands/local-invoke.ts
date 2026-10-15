@@ -111,15 +111,6 @@ import {
 } from '../../utils/caller-credentials.js';
 
 /**
- * cdkd's branding for cdk-local's embed-config. cdkd re-exports cdk-local's
- * local-emulation leaf modules as shims (`runtime-image`, `websocket-*`,
- * `layer-arn-materializer`, etc.) but keeps its OWN `cdkd local` command tree,
- * so it does not go through cdk-local's command factories (which install the
- * config themselves). Without this, those bundled modules render cdk-local's
- * `cdkl` defaults in error strings / resource names. `createLocalCommand`
- * calls `setEmbedConfig(CDKD_EMBED_CONFIG)` once so they read cdkd's branding.
- */
-/**
  * cdk-local's own log lines, routed through cdkd's logger (go-to-k/cdkd#2429).
  * cdk-local ships a second `ConsoleLogger` whose `info` goes to stdout through
  * module state cdkd cannot reach, so without this a container-image
@@ -128,8 +119,10 @@ import {
  * "logged at debug level under --verbose" pointers led nowhere). Each call
  * reads `getLogger()` at call time, so a later `setLogger` still applies; the
  * stdout reservation, level filter, sanitization and formatting are then
- * cdkd's. A `cdkd local studio` child sets `CDKL_LOG_LEVEL` / `CDKL_LOG_STREAM`,
- * under which cdk-local keeps its own logger by design.
+ * cdkd's. cdk-local skips the bridge while `CDKL_LOG_LEVEL` or
+ * `CDKL_LOG_STREAM` is set (the variables its studio sets on its children), so
+ * a user who exported either for standalone `cdkl` gets cdk-local's own
+ * console logger back, stdout included.
  */
 const CDKD_LOCAL_HOST_LOGGER: EmbedHostLogger = {
   debug: (message, ...args) => getLogger().debug(message, ...args),
@@ -140,6 +133,15 @@ const CDKD_LOCAL_HOST_LOGGER: EmbedHostLogger = {
   getLevel: () => getLogger().getLevel(),
 };
 
+/**
+ * cdkd's branding for cdk-local's embed-config. cdkd re-exports cdk-local's
+ * local-emulation leaf modules as shims (`runtime-image`, `websocket-*`,
+ * `layer-arn-materializer`, etc.) but keeps its OWN `cdkd local` command tree,
+ * so it does not go through cdk-local's command factories (which install the
+ * config themselves). Without this, those bundled modules render cdk-local's
+ * `cdkl` defaults in error strings / resource names. `createLocalCommand`
+ * calls `setEmbedConfig(CDKD_EMBED_CONFIG)` once so they read cdkd's branding.
+ */
 const CDKD_EMBED_CONFIG = {
   cliName: 'cdkd local',
   binaryName: 'cdkd',

@@ -117,7 +117,8 @@ describe('createLocalStartCloudFrontCommand', () => {
  * tested there; what cdkd owns, and what is pinned here, is that the flags are
  * ACCEPTED again (the #2528 refusal is gone) and that the registry cdkd hands
  * the factory selects cdkd's S3 provider from the bag this command parses,
- * companions included. Real end to end: the `local-start-cloudfront*` integs.
+ * companions included. Real end to end: the `local-start-cloudfront-from-state`
+ * integ, which serves a cdkd-deployed S3 origin under `--from-state`.
  */
 describe('start-cloudfront honors --from-state (#2600)', () => {
   function parsed(argv: string[]): Command {

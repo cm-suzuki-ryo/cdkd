@@ -57,6 +57,18 @@ import { adoptDeprecatedRegionFlag } from '../region-options.js';
  * subcommands are built) keeps it as a no-op re-set rather than a reset back to
  * cdk-local's `cdkl` defaults.
  */
+/**
+ * What the engine fetches with its own `{region, profile}` clients once a state
+ * source names the deployed stack: the S3 origin's objects (and, for an origin
+ * whose bucket is a pure intrinsic, the distribution config naming it), the
+ * KeyValueStore entries, and the `${AWS::AccountId}` an intrinsic in a Function
+ * URL / Lambda@Edge environment needs (an STS call). Named on whichever state
+ * flag is set, since both reach the same engine paths.
+ */
+const STATE_SOURCE_ENGINE_READS =
+  "a deployed S3 origin's objects and distribution config and the KeyValueStore entries, " +
+  "and the ${AWS::AccountId} in the Function URL / Lambda@Edge environment resolves to the role's account";
+
 export function createLocalStartCloudFrontCommand(): Command {
   const cmd: Command = createCdkLocalStartCloudFrontCommand({
     embedConfig: getEmbedConfig(),
@@ -113,8 +125,8 @@ export function createLocalStartCloudFrontCommand(): Command {
       engineCredentialTripleChannel('the Function URL and Lambda@Edge containers'),
       ENGINE_DYNAMIC_REFERENCE_CHANNEL,
     ],
-    engineFromCfnStackChannel("a deployed S3 origin's objects and KeyValueStore entries"),
-    engineFromStateChannel("a deployed S3 origin's objects and KeyValueStore entries")
+    engineFromCfnStackChannel(STATE_SOURCE_ENGINE_READS),
+    engineFromStateChannel(STATE_SOURCE_ENGINE_READS)
   );
 
   return adoptDeprecatedRegionFlag(cmd);
