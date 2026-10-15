@@ -71,6 +71,8 @@ import {
 } from '../../utils/s3-endpoints.js';
 import { canonicalizeRegion } from '../../utils/aws-partition.js';
 import {
+  explicitDenyPolicyKind,
+  isExplicitDenyError,
   markNameCollision,
   markNonRetryable,
   markRedactedCause,
@@ -132,6 +134,7 @@ import {
   type ResourceNotFound,
   type ResourceIdentityVerdict,
   type ResourceDeleteResult,
+  type ReadCurrentStateContext,
 } from '../../types/resource.js';
 
 /**
@@ -1699,6 +1702,17 @@ const BUCKET_LIST_IDENTITY_DELAY_MS = 1_500;
 const BUCKET_LIST_IDENTITY_BUDGET_MS = 6_000;
 
 /**
+ * go-to-k/cdkd#4969: `HeadBucket` can answer 404 for a bucket `CreateBucket`
+ * made a moment ago. The deploy's observed capture reads right after cdkd's own
+ * write (`afterOwnWrite`), and a 404 there would discard the drift baseline.
+ * Before tags rode `CreateBucket`, the `PutBucketTagging` call sat between the
+ * two and hid the race. The capture is off the deploy's critical path, so a
+ * short wait costs a deploy nothing.
+ */
+const OWN_WRITE_HEAD_ATTEMPTS = 5;
+const OWN_WRITE_HEAD_DELAY_MS = 500;
+
+/**
  * Whether an error from `GetBucketLocation` means "no bucket of that name".
  *
  * The test is the wire error CODE, which the SDK lifts onto `name`.
@@ -2025,6 +2039,52 @@ export function resetS3BucketCreateRetryStateForTests(): void {
   heldCreateBucketWindows.clear();
   ownLeftoverBuckets.clear();
 }
+
+/**
+ * True when a `CreateBucket` that carried tags was refused for lacking
+ * `s3:TagResource` (go-to-k/cdkd#4969). Measured wording, from a session
+ * allowed `s3:CreateBucket` + `s3:PutBucketTagging` only: `AccessDenied` with
+ * "... is not authorized to perform: s3:TagResource on resource: ...". Read off
+ * the RAW SDK error (the create's own catch, before any wrap redacts it).
+ */
+function isCreateTagResourceDenial(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === 'AccessDenied' &&
+    describeAwsFailure(error).detail.includes('s3:TagResource')
+  );
+}
+
+/**
+ * True when S3 refused a `CreateBucket` for the SHAPE of the request it
+ * carried tags in, rather than for the caller (go-to-k/cdkd#4969): a region or
+ * partition whose endpoint does not take `CreateBucketConfiguration.Tags`
+ * (the file already handles partitions whose CreateBucket surface lags, see
+ * the `LocationConstraint` note in `create()`). Not measured -- every
+ * commercial region probed accepts the member -- so it is keyed narrowly on
+ * the request-shape refusals S3 documents: `MalformedXML` and `NotImplemented`
+ * outright (the only XML this create adds over the untagged one is `Tags`), and
+ * `InvalidArgument` / `InvalidRequest` only when the message names a tag.
+ * `InvalidTag` (a bad key or value) is NOT here: the untagged path's
+ * `PutBucketTagging` would refuse the same tag. Classification only; the text
+ * is never printed.
+ */
+function isCreateTagsShapeRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'MalformedXML' || error.name === 'NotImplemented') return true;
+  return (
+    (error.name === 'InvalidArgument' || error.name === 'InvalidRequest') &&
+    /\btags?\b/i.test(describeAwsFailure(error).detail)
+  );
+}
+
+/**
+ * A tagged create's `s3:TagResource` denial whose untagged re-send met an
+ * EXPLICIT deny (go-to-k/cdkd#4969): the policy type that denied the re-send
+ * (a fixed constant, or `null` when unnamed), keyed on the tagged error the
+ * create rethrows, so the wrap can name both causes.
+ */
+const untaggedExplicitDeny = new WeakMap<object, string | null>();
 
 export class S3BucketProvider implements ResourceProvider {
   private s3Client: S3Client;
@@ -4795,7 +4855,8 @@ export class S3BucketProvider implements ResourceProvider {
 
     // Tags. Only applied at create time here (`applyTags` is full-replace, no
     // removal). For update, the caller passes `skipTags=true` and uses the
-    // diff-aware `applyTagDiff` helper instead.
+    // diff-aware `applyTagDiff` helper instead. A create whose `CreateBucket`
+    // already carried the tags passes `skipTags` too (go-to-k/cdkd#4969).
     if (!skipTags && desiredTags.length > 0) {
       await this.applyTags(bucketName, desiredTags);
     }
@@ -6885,7 +6946,10 @@ export class S3BucketProvider implements ResourceProvider {
       // CreateBucket params
       const createParams: {
         Bucket: string;
-        CreateBucketConfiguration?: { LocationConstraint: BucketLocationConstraint };
+        CreateBucketConfiguration?: {
+          LocationConstraint?: BucketLocationConstraint;
+          Tags?: CfnTagEntry[];
+        };
         ObjectLockEnabledForBucket?: boolean;
       } = {
         Bucket: bucketName,
@@ -7047,6 +7111,19 @@ export class S3BucketProvider implements ResourceProvider {
         createParams.ObjectLockEnabledForBucket = true;
       }
 
+      // go-to-k/cdkd#4969: the template's tags ride on `CreateBucket` itself,
+      // as CloudFormation sends them, so an SCP that requires
+      // `aws:RequestTag/...` on `s3:CreateBucket` sees them. A create that
+      // carried them and created the bucket skips the `PutBucketTagging` the
+      // configure step would otherwise repeat (`tagsAppliedOnCreate`).
+      if (desiredTags.length > 0) {
+        createParams.CreateBucketConfiguration = {
+          ...createParams.CreateBucketConfiguration,
+          Tags: desiredTags,
+        };
+      }
+      let tagsAppliedOnCreate = false;
+
       // In `us-east-1` a 200 from `CreateBucket` does NOT mean this call
       // created the bucket, so ask S3 whether the name is already taken
       // BEFORE taking it (issue #2241).
@@ -7189,12 +7266,87 @@ export class S3BucketProvider implements ResourceProvider {
         // proven above: the 409 would move its CreationDate, and in us-east-1
         // the legacy 200 would only reset its ACLs.
         if (!adoptedOwnLeftover) {
+          let tagsSent = createParams.CreateBucketConfiguration?.Tags !== undefined;
           try {
-            await createClient.send(new CreateBucketCommand(createParams));
+            try {
+              await createClient.send(new CreateBucketCommand(createParams));
+            } catch (taggedError) {
+              const tagResourceDenied = isCreateTagResourceDenial(taggedError);
+              if (!tagsSent || !(tagResourceDenied || isCreateTagsShapeRefusal(taggedError))) {
+                throw taggedError;
+              }
+              // go-to-k/cdkd#4969: retry ONCE without tags and let the configure
+              // step's `PutBucketTagging` apply them -- the pre-fix path -- for
+              // the two refusals the tags themselves caused:
+              //  - `s3:TagResource` denied. Tags on `CreateBucket` need it
+              //    (CreateBucket API reference), which a role granted only the
+              //    `s3:PutBucketTagging` the old path needed may lack. Measured:
+              //    such a session is denied the tagged create and succeeds
+              //    untagged. Never fires for this issue's case: an SCP requiring
+              //    request tags lets the tagged create through.
+              //  - a request-shape refusal of the `Tags` member
+              //    (`isCreateTagsShapeRefusal`): a region or partition whose
+              //    CreateBucket does not take it fails EVERY tagged create
+              //    otherwise, where untagged + Put worked before this change.
+              // The extra call is spent on every tagged create of such a role or
+              // region, never by one that accepts the tagged create.
+              this.logger.debug(
+                safeMsg`CreateBucket with tags was ${tagResourceDenied ? 'denied s3:TagResource' : 'refused for its Tags member'} for ${displaySafe(logicalId)}; ` +
+                  `retrying without tags and applying them with PutBucketTagging`
+              );
+              const { Tags: _omitted, ...rest } = createParams.CreateBucketConfiguration ?? {};
+              const untagged = { ...createParams };
+              if (Object.keys(rest).length > 0) untagged.CreateBucketConfiguration = rest;
+              else delete untagged.CreateBucketConfiguration;
+              tagsSent = false;
+              try {
+                await createClient.send(new CreateBucketCommand(untagged));
+              } catch (untaggedError) {
+                // A TagResource denial whose untagged re-send is DENIED too (an
+                // SCP requiring request tags, say): the missing `s3:TagResource`
+                // is the cause to report, since granting it lets the tagged
+                // create through, so the tagged create's denial surfaces. When
+                // the re-send's denial is EXPLICIT, it is marked non-retryable
+                // and the wrap names both causes. A TRADE-OFF, recorded here: a
+                // `TagResource` grant made earlier in the same deploy and still
+                // propagating would let a later tagged attempt through, and
+                // that rare case now fails instead of waiting. It gave way to
+                // the common case -- `TagResource` never granted -- which would
+                // otherwise spend the whole ~47.75s propagation budget at two
+                // CreateBucket calls an attempt, the wait #4969 removes. An
+                // IMPLICIT untagged denial keeps the retry. Any other answer -- the 409s the outer
+                // catch adopts or refuses, a throttle, or anything after a
+                // shape refusal -- is the untagged create's own.
+                if (
+                  tagResourceDenied &&
+                  untaggedError instanceof Error &&
+                  untaggedError.name === 'AccessDenied'
+                ) {
+                  this.logger.debug(
+                    safeMsg`CreateBucket without tags was denied too for ${displaySafe(logicalId)}; ` +
+                      `reporting the s3:TagResource denial`
+                  );
+                  const untaggedText = describeAwsFailure(untaggedError).detail;
+                  if (isExplicitDenyError(untaggedText) && taggedError instanceof Error) {
+                    untaggedExplicitDeny.set(
+                      taggedError,
+                      explicitDenyPolicyKind(untaggedText) ?? null
+                    );
+                    markNonRetryable(taggedError);
+                  }
+                  throw taggedError;
+                }
+                throw untaggedError;
+              }
+            }
           } catch (sendError) {
             createBucketLatch.noteFailure(logicalId, sendError, attemptStartMs, ambiguousWindow);
             throw sendError;
           }
+          // Only a create that MADE the bucket applied its tags: a legacy
+          // us-east-1 200 over an existing bucket, or one the pre-flight could
+          // not place, keeps the `PutBucketTagging`.
+          tagsAppliedOnCreate = tagsSent && preflight.kind === 'absent';
         }
         createdNewBucket = adoptedOwnLeftover || preflight.kind === 'absent';
         bucketLeftBehind = createdNewBucket;
@@ -7336,7 +7488,10 @@ export class S3BucketProvider implements ResourceProvider {
       try {
         effectiveOverrides = await this.applyConfiguration(bucketName, properties, {
           ...(context ? { context } : {}),
-          desiredTags,
+          // go-to-k/cdkd#4969: tags `CreateBucket` already set need no Put.
+          // An adopted bucket (our own leftover, or `BucketAlreadyOwnedByYou`)
+          // got none from this call, so it still takes the Put.
+          ...(tagsAppliedOnCreate ? { skipTags: true as const } : { desiredTags }),
         });
         for (const [key, value] of await this.applyAllSubConfigsForCreate(
           bucketName,
@@ -7797,8 +7952,28 @@ export class S3BucketProvider implements ResourceProvider {
     }
     // Both halves masked RAW as well (issue #2177): the engine masks the thrown
     // message, but only a raw value reaches the masker's whole-value arm.
+    // go-to-k/cdkd#4969: an explicit deny fails fast now (no retry), so name
+    // what refused it -- a fixed policy-type constant, never AWS's text, which
+    // carries the caller's identity and possibly a policy ARN.
+    const denyKind = failure.redacted ? explicitDenyPolicyKind(failure.detail) : undefined;
+    const denyNote =
+      failure.redacted && isExplicitDenyError(failure.detail)
+        ? ` Refused by an explicit deny${denyKind !== undefined ? ` (${denyKind})` : ''}, which retrying cannot clear.`
+        : '';
+    // go-to-k/cdkd#4969: a tagged CreateBucket needs `s3:TagResource`, and the
+    // redacted summary alone does not say which action was refused.
+    const tagResourceNote =
+      failure.redacted && isCreateTagResourceDenial(error)
+        ? ' Creating a bucket with tags needs s3:TagResource.'
+        : '';
+    // go-to-k/cdkd#4969: that denial's untagged re-send met an explicit deny.
+    const untaggedDenyKind = error instanceof Error ? untaggedExplicitDeny.get(error) : undefined;
+    const untaggedDenyNote =
+      untaggedDenyKind !== undefined
+        ? ` The untagged retry was refused by an explicit deny${untaggedDenyKind !== null ? ` (${untaggedDenyKind})` : ''}, which retrying cannot clear.`
+        : '';
     const wrapped = new ProvisioningError(
-      `Failed to ${operation} S3 bucket ${displaySafe(logicalId)}: ${this.maskRaw(failure.summary)}`,
+      `Failed to ${operation} S3 bucket ${displaySafe(logicalId)}: ${this.maskRaw(failure.summary)}${denyNote}${tagResourceNote}${untaggedDenyNote}`,
       resourceType,
       logicalId,
       physicalId,
@@ -7919,24 +8094,35 @@ export class S3BucketProvider implements ResourceProvider {
   async readCurrentState(
     physicalId: string,
     _logicalId: string,
-    _resourceType: string
+    _resourceType: string,
+    _properties?: Record<string, unknown>,
+    context?: ReadCurrentStateContext
   ): Promise<Record<string, unknown> | ResourceNotFound | undefined> {
     // Fast existence check. NotFound / NoSuchBucket (a HEAD's 404 carries no
     // body, so the status is its only answer) is the bucket deleted outside
-    // cdkd (go-to-k/cdkd#4283).
-    try {
-      await this.s3Client.send(new HeadBucketCommand({ Bucket: physicalId }));
-    } catch (err) {
-      const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-      if (
-        err instanceof NoSuchBucket ||
-        e.name === 'NotFound' ||
-        e.name === 'NoSuchBucket' ||
-        e.$metadata?.httpStatusCode === 404
-      ) {
-        return RESOURCE_NOT_FOUND;
+    // cdkd (go-to-k/cdkd#4283). Right after cdkd's own write, a 404 is first
+    // retried briefly (`OWN_WRITE_HEAD_ATTEMPTS`).
+    const headAttempts = context?.afterOwnWrite === true ? OWN_WRITE_HEAD_ATTEMPTS : 1;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.s3Client.send(new HeadBucketCommand({ Bucket: physicalId }));
+        break;
+      } catch (err) {
+        const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+        if (
+          err instanceof NoSuchBucket ||
+          e.name === 'NotFound' ||
+          e.name === 'NoSuchBucket' ||
+          e.$metadata?.httpStatusCode === 404
+        ) {
+          if (attempt < headAttempts) {
+            await new Promise((r) => setTimeout(r, OWN_WRITE_HEAD_DELAY_MS));
+            continue;
+          }
+          return RESOURCE_NOT_FOUND;
+        }
+        throw err;
       }
-      throw err;
     }
 
     // Fire all 16 GET / List calls in parallel. Each helper handles its own
