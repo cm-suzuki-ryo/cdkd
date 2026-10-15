@@ -107,7 +107,10 @@ import {
 import { clearWriteOnlyPropertiesCache } from '../../../src/provisioning/write-only-properties.js';
 import { clearReadOnlyPropertiesCache } from '../../../src/provisioning/read-only-properties.js';
 import { clearCreateOnlyPropertiesCache } from '../../../src/provisioning/create-only-properties.js';
-import { isRetryableTransientError } from '../../../src/deployment/retryable-errors.js';
+import {
+  isMarkedNonRetryable,
+  isRetryableTransientError,
+} from '../../../src/deployment/retryable-errors.js';
 import { RESOURCE_NOT_FOUND } from '../../../src/types/resource.js';
 
 describe('CloudControlProvider delete region verification', () => {
@@ -2459,6 +2462,76 @@ describe('CloudControlProvider update: GuardDuty detector read-back keys (go-to-
     expect(updateCalls()).toEqual([
       [
         { op: 'replace', path: '/Enable', value: false },
+        { op: 'remove', path: '/Features' },
+        { op: 'remove', path: '/DataSources' },
+      ],
+    ]);
+  });
+
+  it('drift --revert refuses, non-retryably and sending nothing, a Features drift that is order only (go-to-k/cdkd#4935 M1)', async () => {
+    const live = [
+      { Name: 'RDS_LOGIN_EVENTS', Status: 'ENABLED' },
+      { Name: 'RUNTIME_MONITORING', Status: 'ENABLED' },
+    ];
+    const snapshot = { Enable: true, Features: live, DataSources: { S3Logs: { Enable: true } } };
+    const failure = await provider
+      .update('Detector', 'det', TYPE, { ...snapshot, Features: [live[1], live[0]] }, snapshot, {
+        desiredFromAwsReadback: true,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/cannot revert Features: .*cdkd drift --accept/);
+    // go-to-k/cdkd#4935 M2: --accept records EVERY drifted property, so the
+    // advice must say so and ask for other drift on the detector to be
+    // reverted first.
+    expect((failure as Error).message).toMatch(
+      /records the live value of EVERY drifted property of the stack, not only Features: revert any other drift on this detector first/
+    );
+    expect(isMarkedNonRetryable(failure)).toBe(true);
+    expect(updateCalls()).toEqual([]);
+  });
+
+  it('drift --revert narrows a drifted Features list to the changed entry (go-to-k/cdkd#4921)', async () => {
+    const live = [
+      { Name: 'RDS_LOGIN_EVENTS', Status: 'DISABLED' },
+      { Name: 'EKS_RUNTIME_MONITORING', Status: 'DISABLED' },
+      { Name: 'RUNTIME_MONITORING', Status: 'ENABLED' },
+    ];
+    // A different order from the live list: entries pair by Name.
+    const baseline = [live[2], live[1], { ...live[0], Status: 'ENABLED' }];
+    const snapshot = { Enable: true, Features: live, DataSources: { S3Logs: { Enable: true } } };
+    await provider.update('Detector', 'det', TYPE, { ...snapshot, Features: baseline }, snapshot, {
+      desiredFromAwsReadback: true,
+    });
+
+    expect(updateCalls()).toEqual([
+      [
+        { op: 'replace', path: '/Features', value: [{ Name: 'RDS_LOGIN_EVENTS', Status: 'ENABLED' }] },
+        { op: 'remove', path: '/DataSources' },
+      ],
+    ]);
+  });
+
+  it('drift --revert (desiredFromAwsReadback) removes both undrifted read-back keys (go-to-k/cdkd#4921)', async () => {
+    const snapshot = {
+      Enable: true,
+      Features: FEATURES,
+      DataSources: { S3Logs: { Enable: true } },
+      FindingPublishingFrequency: 'ONE_HOUR',
+    };
+    await provider.update(
+      'Detector',
+      'det',
+      TYPE,
+      { ...snapshot, FindingPublishingFrequency: 'SIX_HOURS' },
+      snapshot,
+      { desiredFromAwsReadback: true }
+    );
+
+    expect(updateCalls()).toEqual([
+      [
+        { op: 'replace', path: '/FindingPublishingFrequency', value: 'SIX_HOURS' },
         { op: 'remove', path: '/Features' },
         { op: 'remove', path: '/DataSources' },
       ],
