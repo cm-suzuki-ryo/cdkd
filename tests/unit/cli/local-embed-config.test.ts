@@ -88,6 +88,27 @@ describe('cdkd local embed-config branding', () => {
       }
     });
 
+    it('drops a fallen-back debug line unless cdkd is at debug, and drops the args', () => {
+      resetEmbedConfig();
+      createLocalCommand();
+      const host = getEmbedConfig().logger!;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const before = getLogger().getLevel();
+      try {
+        getLogger().setLevel('info');
+        host.debug('withheld detail', 1n);
+        expect(err).not.toHaveBeenCalled();
+        getLogger().setLevel('debug');
+        host.debug('withheld detail', { secret: 'ARG-SENTINEL' }, 1n);
+        const said = err.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+        expect(said).toContain('withheld detail');
+        expect(said).not.toContain('ARG-SENTINEL');
+      } finally {
+        getLogger().setLevel(before);
+        vi.restoreAllMocks();
+      }
+    });
+
     it('does not recurse when a line re-enters the bridge', () => {
       resetEmbedConfig();
       createLocalCommand();

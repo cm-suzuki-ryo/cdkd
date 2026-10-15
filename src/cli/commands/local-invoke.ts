@@ -115,20 +115,6 @@ import {
   AWS_CREDENTIAL_ENV_KEYS,
 } from '../../utils/caller-credentials.js';
 
-/**
- * cdk-local's own log lines, routed through cdkd's logger (go-to-k/cdkd#2429).
- * cdk-local ships a second `ConsoleLogger` whose `info` goes to stdout through
- * module state cdkd cannot reach, so without this a container-image
- * `cdkd local invoke ... | jq` got `Building container image ...` mixed into
- * the payload, and cdkd's `--verbose` never raised cdk-local's level (its
- * "logged at debug level under --verbose" pointers led nowhere). Each call
- * reads `getLogger()` at call time, so a later `setLogger` still applies; the
- * stdout reservation, level filter, sanitization and formatting are then
- * cdkd's. cdk-local skips the bridge while `CDKL_LOG_LEVEL` or
- * `CDKL_LOG_STREAM` is set (the variables its studio sets on its children), so
- * a user who exported either for standalone `cdkl` gets cdk-local's own
- * console logger back, stdout included.
- */
 /** True while a line is being handed to cdkd's logger (re-entry guard). */
 let hostLoggerForwarding = false;
 
@@ -136,7 +122,9 @@ let hostLoggerForwarding = false;
  * Hand one cdk-local line to cdkd's logger. A throw there (a `BigInt` or a
  * circular arg its `JSON.stringify` cannot render) or a re-entry falls back
  * to stderr, display-safe, with the args dropped. Never cdk-local's own
- * console path, which would put an `info` line on the reserved stdout.
+ * console path, which would put an `info` line on the reserved stdout. No
+ * log-line masker is bound on `cdkd local` paths (the masker is deploy-side,
+ * per resource), so the fallback skipping it loses nothing.
  */
 function forwardToCdkdLogger(
   level: 'debug' | 'info' | 'warn' | 'error',
@@ -158,6 +146,20 @@ function forwardToCdkdLogger(
   console.error(terminalSafe(String(message)));
 }
 
+/**
+ * cdk-local's own log lines, routed through cdkd's logger (go-to-k/cdkd#2429).
+ * cdk-local ships a second `ConsoleLogger` whose `info` goes to stdout through
+ * module state cdkd cannot reach, so without this a container-image
+ * `cdkd local invoke ... | jq` got `Building container image ...` mixed into
+ * the payload, and cdkd's `--verbose` never raised cdk-local's level (its
+ * "logged at debug level under --verbose" pointers led nowhere). Each call
+ * reads `getLogger()` at call time, so a later `setLogger` still applies; the
+ * stdout reservation, level filter, sanitization and formatting are then
+ * cdkd's. cdk-local skips the bridge while `CDKL_LOG_LEVEL` or
+ * `CDKL_LOG_STREAM` is set (the variables its studio sets on its children), so
+ * a user who exported either for standalone `cdkl` gets cdk-local's own
+ * console logger back, stdout included.
+ */
 const CDKD_LOCAL_HOST_LOGGER: EmbedHostLogger = {
   debug: (message, ...args) => forwardToCdkdLogger('debug', message, args),
   info: (message, ...args) => forwardToCdkdLogger('info', message, args),
