@@ -70,6 +70,25 @@ attributes are `NameServers` of `AWS::Route53::HostedZone` and
 `Fn::ImportValue` and `Fn::GetStackOutput`, including how they read from
 CloudFormation-managed stacks.
 
+### S3 bucket `DomainName` outside the commercial partition
+
+`Fn::GetAtt <Bucket>.DomainName` on an `AWS::S3::Bucket` returns S3's global
+host, `<bucket>.s3.<url-suffix>`. This is the spelling `aws-cdk-lib` uses for
+the `bucketDomainName` of a bucket imported with `Bucket.fromBucketAttributes`.
+The global host serves the bucket in the commercial (`aws`) partition, but not
+in `aws-cn` or `aws-us-gov`:
+
+| Partition | `DomainName` cdkd returns | Reaches the bucket? |
+| --- | --- | --- |
+| `aws` | `<bucket>.s3.amazonaws.com` | Yes |
+| `aws-cn` | `<bucket>.s3.amazonaws.com.cn` | No: the name does not resolve |
+| `aws-us-gov` | `<bucket>.s3.amazonaws.com` | No: commercial S3 answers `NoSuchBucket` |
+
+In `aws-cn` and `aws-us-gov`, reference `RegionalDomainName` instead
+(`bucket.bucketRegionalDomainName` in CDK). It returns
+`<bucket>.s3.<region>.<url-suffix>`, the bucket's regional endpoint, which
+exists in those partitions too.
+
 ## Pseudo Parameters
 
 | Parameter | Status |
