@@ -40,6 +40,9 @@ vi.mock('../../../src/utils/logger.js', () => {
 
 import { S3BucketProvider } from '../../../src/provisioning/providers/s3-bucket-provider.js';
 import { RESOURCE_NOT_FOUND } from '../../../src/types/resource.js';
+import { getLogger } from '../../../src/utils/logger.js';
+
+const providerDebug = () => vi.mocked(getLogger().child('S3BucketProvider').debug);
 
 /**
  * Convenience: build a "feature not configured" error matching the AWS error
@@ -162,6 +165,66 @@ describe('S3BucketProvider.readCurrentState', () => {
     const result = await provider.readCurrentState('missing', 'Logical', 'AWS::S3::Bucket');
 
     expect(result).toBe(RESOURCE_NOT_FOUND);
+  });
+
+  describe('right after cdkd own write (go-to-k/cdkd#4969)', () => {
+    const notFound = () =>
+      Object.assign(new Error('NotFound'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+
+    it('retries a lagging HeadBucket 404 and returns the readback', async () => {
+      vi.useFakeTimers();
+      try {
+        mockSend.mockRejectedValueOnce(notFound());
+        mockSend.mockRejectedValueOnce(notFound());
+
+        const pending = provider.readCurrentState('b', 'Logical', 'AWS::S3::Bucket', {}, {
+          afterOwnWrite: true,
+        });
+        await vi.runAllTimersAsync();
+        const result = await pending;
+
+        expect(result).not.toBe(RESOURCE_NOT_FOUND);
+        expect(result).toMatchObject({ BucketName: 'b' });
+        const heads = mockSend.mock.calls.filter(([c]) => c instanceof HeadBucketCommand);
+        expect(heads).toHaveLength(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('still reports RESOURCE_NOT_FOUND once every attempt answers 404', async () => {
+      vi.useFakeTimers();
+      try {
+        for (let i = 0; i < 5; i++) mockSend.mockRejectedValueOnce(notFound());
+
+        const pending = provider.readCurrentState('b', 'Logical', 'AWS::S3::Bucket', {}, {
+          afterOwnWrite: true,
+        });
+        await vi.runAllTimersAsync();
+
+        expect(await pending).toBe(RESOURCE_NOT_FOUND);
+        const heads = mockSend.mock.calls.filter(([c]) => c instanceof HeadBucketCommand);
+        expect(heads).toHaveLength(5);
+        expect(providerDebug()).toHaveBeenCalledWith(
+          expect.stringContaining('HeadBucket still answered 404 after 5 attempts')
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not retry a 404 on a plain drift read', async () => {
+      mockSend.mockRejectedValueOnce(notFound());
+
+      const result = await provider.readCurrentState('b', 'Logical', 'AWS::S3::Bucket', {}, {});
+
+      expect(result).toBe(RESOURCE_NOT_FOUND);
+      const heads = mockSend.mock.calls.filter(([c]) => c instanceof HeadBucketCommand);
+      expect(heads).toHaveLength(1);
+      expect(providerDebug()).not.toHaveBeenCalledWith(
+        expect.stringContaining('HeadBucket still answered 404')
+      );
+    });
   });
 
   it('rethrows a 403 HeadBucket rather than reporting the bucket gone', async () => {

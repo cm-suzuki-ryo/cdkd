@@ -775,6 +775,7 @@
         "bench-cdk-sample",
         "cloudfront-function-url",
         "local-start-cloudfront",
+        "local-start-cloudfront-from-state",
         "s3-cloudfront"
       ],
       "signals": {
@@ -786,6 +787,10 @@
         ],
         "local-start-cloudfront": [
           "l2"
+        ],
+        "local-start-cloudfront-from-state": [
+          "l2",
+          "literal"
         ],
         "s3-cloudfront": [
           "l2",
@@ -1324,6 +1329,7 @@
         "rollback-replay-effective-props",
         "sg-circular-dependency",
         "stack-copy-create-tokens",
+        "tags-propagation",
         "vpc-lambda",
         "vpc-lambda-cr-race",
         "vpc-nat-gateway"
@@ -1485,6 +1491,9 @@
         ],
         "stack-copy-create-tokens": [
           "l2"
+        ],
+        "tags-propagation": [
+          "l1"
         ],
         "vpc-lambda": [
           "l2"
@@ -1718,7 +1727,8 @@
       "resourceType": "AWS::EC2::NetworkAcl",
       "integs": [
         "ec2-vpc",
-        "import-migrate-vpc"
+        "import-migrate-vpc",
+        "tags-propagation"
       ],
       "signals": {
         "ec2-vpc": [
@@ -1726,6 +1736,9 @@
         ],
         "import-migrate-vpc": [
           "l2"
+        ],
+        "tags-propagation": [
+          "l1"
         ]
       }
     },
@@ -2025,6 +2038,7 @@
         "rollback-replay-effective-props",
         "sg-circular-dependency",
         "stack-copy-create-tokens",
+        "tags-propagation",
         "vpc-lambda",
         "vpc-lambda-cr-race",
         "vpc-nat-gateway"
@@ -2187,6 +2201,9 @@
         "stack-copy-create-tokens": [
           "l2"
         ],
+        "tags-propagation": [
+          "l1"
+        ],
         "vpc-lambda": [
           "l2"
         ],
@@ -2237,6 +2254,7 @@
         "rollback-replay-effective-props",
         "sg-circular-dependency",
         "stack-copy-create-tokens",
+        "tags-propagation",
         "update-replace",
         "vpc-lambda",
         "vpc-lambda-cr-race"
@@ -2360,6 +2378,9 @@
           "l2",
           "literal"
         ],
+        "tags-propagation": [
+          "l1"
+        ],
         "update-replace": [
           "l2",
           "literal"
@@ -2464,6 +2485,7 @@
         "sdk-to-cc-autoroute",
         "sg-circular-dependency",
         "stack-copy-create-tokens",
+        "tags-propagation",
         "vpc-lambda",
         "vpc-lambda-cr-race",
         "vpc-nat-gateway"
@@ -2645,6 +2667,9 @@
         ],
         "stack-copy-create-tokens": [
           "l2"
+        ],
+        "tags-propagation": [
+          "l1"
         ],
         "vpc-lambda": [
           "l2"
@@ -2947,6 +2972,7 @@
         "servicediscovery",
         "sg-circular-dependency",
         "stack-copy-create-tokens",
+        "tags-propagation",
         "vpc-lambda",
         "vpc-lambda-cr-race",
         "vpc-nat-gateway"
@@ -3147,6 +3173,9 @@
         "stack-copy-create-tokens": [
           "l2",
           "literal"
+        ],
+        "tags-propagation": [
+          "l1"
         ],
         "vpc-lambda": [
           "l2"
@@ -4984,7 +5013,8 @@
         "rollback-command",
         "sdk-ccapi-crossref",
         "secret-derived-immutable-names",
-        "stream-delete-redeploy"
+        "stream-delete-redeploy",
+        "tags-propagation"
       ],
       "signals": {
         "cache-streaming": [
@@ -5026,6 +5056,9 @@
         "stream-delete-redeploy": [
           "l2",
           "literal"
+        ],
+        "tags-propagation": [
+          "l1"
         ]
       }
     },
@@ -5188,6 +5221,7 @@
         "local-invoke-python",
         "local-invoke-ruby",
         "local-invoke-stage",
+        "local-start-alb-from-state",
         "local-start-api",
         "local-start-api-container",
         "local-start-api-rest-v1-non-proxy",
@@ -5484,6 +5518,10 @@
         "local-invoke-stage": [
           "l2"
         ],
+        "local-start-alb-from-state": [
+          "l2",
+          "literal"
+        ],
         "local-start-api": [
           "l2"
         ],
@@ -5677,6 +5715,7 @@
         "cloudfront-function-url",
         "cognito-lambda-triggers",
         "export",
+        "local-start-alb-from-state",
         "migrate-from-cfn",
         "propagation-races-2",
         "recreate-parent-child-permission",
@@ -5701,6 +5740,9 @@
           "literal"
         ],
         "export": [
+          "literal"
+        ],
+        "local-start-alb-from-state": [
           "literal"
         ],
         "migrate-from-cfn": [
@@ -6155,6 +6197,7 @@
         "local-invoke-agentcore-from-state",
         "local-invoke-from-state",
         "local-start-cloudfront",
+        "local-start-cloudfront-from-state",
         "log-pipeline",
         "lost-child-after-failed-deploy",
         "migrate-from-cfn",
@@ -6275,6 +6318,10 @@
         ],
         "local-start-cloudfront": [
           "l2"
+        ],
+        "local-start-cloudfront-from-state": [
+          "l2",
+          "literal"
         ],
         "log-pipeline": [
           "l2"

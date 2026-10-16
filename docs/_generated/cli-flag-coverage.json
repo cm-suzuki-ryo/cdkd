@@ -97,7 +97,8 @@
         "secrets-dynamic-ref",
         "sg-circular-dependency",
         "ssm-secure-dynamic-ref",
-        "stage-assets"
+        "stage-assets",
+        "tags-propagation"
       ]
     },
     {
@@ -133,6 +134,7 @@
         "bucket-deployment",
         "budgets",
         "cache-streaming",
+        "cc-abandoned-create-resume",
         "cc-api-fallback",
         "cc-api-fallback-transitions",
         "cc-final-snapshot-handlers",
@@ -290,6 +292,7 @@
         "local-invoke-from-state",
         "local-run-task-from-state",
         "local-start-alb-from-state",
+        "local-start-cloudfront-from-state",
         "local-start-service",
         "loggroup-class-guard",
         "loggroup-kms-associate",
@@ -542,6 +545,7 @@
         "bucket-deployment",
         "budgets",
         "cache-streaming",
+        "cc-abandoned-create-resume",
         "cc-api-fallback",
         "cc-api-fallback-transitions",
         "cc-final-snapshot-handlers",
@@ -917,6 +921,7 @@
         "bucket-deployment",
         "budgets",
         "cache-streaming",
+        "cc-abandoned-create-resume",
         "cc-api-fallback",
         "cc-api-fallback-transitions",
         "cc-final-snapshot-handlers",
@@ -1081,6 +1086,7 @@
         "local-invoke-from-state",
         "local-run-task-from-state",
         "local-start-alb-from-state",
+        "local-start-cloudfront-from-state",
         "local-start-service",
         "loggroup-class-guard",
         "loggroup-kms-associate",
@@ -1254,6 +1260,7 @@
       "flag": "--role-arn",
       "integs": [
         "access-key-cloudmap-fix-forward-orphan",
+        "cc-abandoned-create-resume",
         "docdb-fix-forward-orphan",
         "dynamodb-fix-forward-orphan",
         "emr-cluster",
@@ -1273,7 +1280,9 @@
         "replaced-delete-failed-rollback",
         "rollback-command",
         "s3-fix-forward-orphan",
-        "s3-retry-own-bucket"
+        "s3-retry-own-bucket",
+        "tags-propagation",
+        "vpc-nat-gateway"
       ]
     },
     {
@@ -1336,6 +1345,7 @@
         "bucket-deployment",
         "budgets",
         "cache-streaming",
+        "cc-abandoned-create-resume",
         "cc-api-fallback",
         "cc-api-fallback-transitions",
         "cc-final-snapshot-handlers",
@@ -1503,6 +1513,7 @@
         "local-invoke-from-state",
         "local-run-task-from-state",
         "local-start-alb-from-state",
+        "local-start-cloudfront-from-state",
         "local-start-service",
         "loggroup-class-guard",
         "loggroup-kms-associate",
@@ -1691,8 +1702,10 @@
         "lambda-url-authtype-replay",
         "local-invoke",
         "local-invoke-agentcore-from-state",
+        "local-invoke-container",
         "local-invoke-from-state",
         "local-start-alb-from-state",
+        "local-start-cloudfront-from-state",
         "macro-expansion",
         "nested-stack-3level",
         "nested-stack-deep",
@@ -1716,7 +1729,8 @@
         "stepfunctions",
         "stepfunctions-logging",
         "tags-propagation",
-        "throttle-wide-dag"
+        "throttle-wide-dag",
+        "vpc-nat-gateway"
       ]
     },
     {
@@ -2238,6 +2252,7 @@
     "--namespace",
     "--nat-gateway-id",
     "--nat-gateway-ids",
+    "--network-acl-ids",
     "--network-interface-id",
     "--network-load-balancer-arns",
     "--next-token",
@@ -2294,6 +2309,7 @@
     "--prefer-offline",
     "--prefix",
     "--prefix-list-id",
+    "--prefix-list-ids",
     "--protect-configuration-id",
     "--protocol",
     "--provider",
@@ -2390,6 +2406,7 @@
     "--statement-id",
     "--status",
     "--stream-arn",
+    "--stream-mode-details",
     "--stream-name",
     "--subnet-id",
     "--subnet-ids",
