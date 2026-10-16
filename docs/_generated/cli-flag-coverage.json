@@ -2120,6 +2120,7 @@
     "--drop-failed",
     "--duration-seconds",
     "--email-identity",
+    "--endpoint-name",
     "--enforce-consumer-deletion",
     "--engine",
     "--entity-filter",
