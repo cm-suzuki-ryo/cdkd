@@ -19,7 +19,7 @@
 # go-to-k/cdkd#4978: a PerRegion endpoint's `Fn::GetAtt
 # RegionalEndpoints.<region>.DomainName` feeds an SSM parameter. The SDK
 # provider of 0.300.x did not record it and served the endpoint ARN; this build
-# records it on create / update, and heals a 0.300.x record that lacks it.
+# records it on create / update, and heals a record 0.300.x created without it.
 
 set -euo pipefail
 
@@ -80,6 +80,8 @@ case "${REGION}" in
 esac
 export SECONDARY_REGION
 PARAM_NAME="/cdkd-integ/webfn-replace/regional-domain"
+# Phase 3b renames the PerRegion endpoint; the stack reads the same variable.
+export REGIONAL_ENDPOINT_NAME="regional"
 
 # Identifiers of every resource of a type under the web function.
 cc_ids() { # usage: cc_ids <type>
@@ -264,7 +266,7 @@ assert_serves() { # usage: assert_serves <marker>
 # The SSM parameter holds what `Fn::GetAtt RegionalEndpoints.<secondary>.DomainName`
 # resolved to; it must be the domain AWS reports for that region (#4978).
 regional_domain() { # prints the secondary region's domain AWS reports
-  aws lambda-web get-web-function-endpoint --function-name "${FN_NAME}" --endpoint-name regional --region "${REGION}" \
+  aws lambda-web get-web-function-endpoint --function-name "${FN_NAME}" --endpoint-name "${REGIONAL_ENDPOINT_NAME}" --region "${REGION}" \
     --query "regionalEndpoints.\"${SECONDARY_REGION}\".domainName" --output text
 }
 param_value() {
@@ -384,10 +386,19 @@ assert_route 'phase 3' sdk
 assert_serves v3
 assert_regional_getatt 'phase 3'
 
-echo "==> Phase 3b: deploy v4 with ${PREFIX_CDKD_VERSION} (an SDK endpoint record without the #4978 attributes)"
-V4="$(upload_code v4)"
-OUT="$(deploy "${V4}" "${PREFIX_BIN}")" || { echo "${OUT}"; echo "FAIL: phase 3b deploy" >&2; exit 1; }
+echo "==> Phase 3b: rename the PerRegion endpoint with ${PREFIX_CDKD_VERSION} (a record created without the #4978 attributes)"
+# A rename replaces the endpoint, so the release before the fix CREATES its
+# record; an update would keep the attributes this build already recorded.
+export REGIONAL_ENDPOINT_NAME="regional2"
+OUT="$(deploy "${V3}" "${PREFIX_BIN}")" || { echo "${OUT}"; echo "FAIL: phase 3b deploy" >&2; exit 1; }
 echo "${OUT}"
+REP3="$(record RegionalEndpoint '.physicalId')"
+case "${REP3}" in
+  */endpoint/regional2) ;;
+  *) echo "FAIL: phase 3b: the PerRegion endpoint record is ${REP3}, expected the renamed endpoint/regional2" >&2; exit 1 ;;
+esac
+assert_gone "old PerRegion endpoint ${REP1} still exists after the rename" \
+  aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionEndpoint --identifier "${REP1}" --region "${REGION}"
 # Sentinel: the release before the fix serves the ARN, or phase 3c would pass
 # without the record lacking the attribute it heals.
 GOT="$(param_value)"
@@ -403,10 +414,9 @@ if [ "${HAS_KEY}" != "false" ]; then
   echo "FAIL: phase 3b: the ${PREFIX_CDKD_VERSION} record already carries the regional DomainName (${HAS_KEY})" >&2
   exit 1
 fi
-REV4="$(assert_one_revision 'phase 3b' | tail -1)"
 
-echo "==> Phase 3c: deploy v4 again with this build (heals the ${PREFIX_CDKD_VERSION} record)"
-OUT="$(deploy "${V4}")" || { echo "${OUT}"; echo "FAIL: phase 3c deploy" >&2; exit 1; }
+echo "==> Phase 3c: deploy v3 again with this build (heals the ${PREFIX_CDKD_VERSION} record)"
+OUT="$(deploy "${V3}")" || { echo "${OUT}"; echo "FAIL: phase 3c deploy" >&2; exit 1; }
 echo "${OUT}"
 assert_regional_getatt 'phase 3c'
 HAS_KEY="$(record RegionalEndpoint ".attributes | has(\"RegionalEndpoints.${SECONDARY_REGION}.DomainName\")")"
@@ -415,11 +425,11 @@ if [ "${HAS_KEY}" != "true" ]; then
   exit 1
 fi
 echo "    OK: phase 3c: the healed attribute was saved to the record"
-assert_serves v4
+assert_serves v3
 
 echo "==> Phase 4: rename the endpoint (SDK create of the new one, SDK delete of the old one)"
 T0="$(date +%s)"
-OUT="$(ENDPOINT_NAME=live deploy "${V4}")" || { echo "${OUT}"; echo "FAIL: phase 4 deploy" >&2; exit 1; }
+OUT="$(ENDPOINT_NAME=live deploy "${V3}")" || { echo "${OUT}"; echo "FAIL: phase 4 deploy" >&2; exit 1; }
 echo "${OUT}"
 echo "    phase 4 deploy took $(($(date +%s) - T0)) s"
 EP4="$(record Endpoint '.physicalId')"
@@ -431,10 +441,10 @@ assert_gone "old endpoint ${EP1} still exists after the rename" \
   aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionEndpoint --identifier "${EP1}" --region "${REGION}"
 echo "    OK: old endpoint ${EP1} is gone"
 assert_route 'phase 4' sdk
-assert_serves v4
+assert_serves v3
 
 echo "==> Phase 5: cdkd drift reports no drift on the SDK-recorded revision and endpoint"
-DRIFT_OUT="$(ENDPOINT_NAME=live CODE_BUCKET="${CODE_BUCKET}" CODE_KEY="${CODE_KEY}" CODE_VERSION="${V4}" \
+DRIFT_OUT="$(ENDPOINT_NAME=live CODE_BUCKET="${CODE_BUCKET}" CODE_KEY="${CODE_KEY}" CODE_VERSION="${V3}" \
   node "${LOCAL_DIST}" drift "${STACK}" --state-bucket "${STATE_BUCKET}" --region "${REGION}" 2>&1)" || {
   echo "${DRIFT_OUT}"
   echo "FAIL: cdkd drift reported drift (or failed) right after a deploy" >&2
@@ -451,17 +461,17 @@ fi
 echo "    OK: no drift, all 6 resources compared"
 
 echo "==> Destroy"
-ENDPOINT_NAME=live CODE_BUCKET="${CODE_BUCKET}" CODE_KEY="${CODE_KEY}" CODE_VERSION="${V4}" \
+ENDPOINT_NAME=live CODE_BUCKET="${CODE_BUCKET}" CODE_KEY="${CODE_KEY}" CODE_VERSION="${V3}" \
   node "${LOCAL_DIST}" destroy "${STACK}" --state-bucket "${STATE_BUCKET}" --region "${REGION}" --force
 
 assert_gone "web function ${FN_NAME} still exists after destroy" \
   aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunction --identifier "${FN_ARN}" --region "${REGION}"
 assert_gone "endpoint ${EP4} still exists after destroy" \
   aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionEndpoint --identifier "${EP4}" --region "${REGION}"
-assert_gone "PerRegion endpoint ${REP1} still exists after destroy" \
-  aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionEndpoint --identifier "${REP1}" --region "${REGION}"
-assert_gone "revision ${REV4} still exists after destroy" \
-  aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionRevision --identifier "${REV4}" --region "${REGION}"
+assert_gone "PerRegion endpoint ${REP3} still exists after destroy" \
+  aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionEndpoint --identifier "${REP3}" --region "${REGION}"
+assert_gone "revision ${REV3} still exists after destroy" \
+  aws cloudcontrol get-resource --type-name AWS::Lambda::WebFunctionRevision --identifier "${REV3}" --region "${REGION}"
 assert_gone "parameter ${PARAM_NAME} still exists after destroy" \
   aws ssm get-parameter --name "${PARAM_NAME}" --region "${REGION}"
 assert_gone "role ${ROLE_NAME} still exists after destroy" aws iam get-role --role-name "${ROLE_NAME}"

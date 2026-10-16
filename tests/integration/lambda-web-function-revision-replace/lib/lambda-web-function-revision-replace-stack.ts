@@ -73,7 +73,9 @@ export class LambdaWebFunctionRevisionReplaceStack extends cdk.Stack {
     const secondaryRegion = process.env['SECONDARY_REGION'] ?? 'us-west-2';
     const regionalEndpoint = new lambda.CfnWebFunctionEndpoint(this, 'RegionalEndpoint', {
       functionName: fn.ref,
-      endpointName: 'regional',
+      // A later phase renames it with the release before #4978, so that
+      // release CREATES the record this build then heals.
+      endpointName: process.env['REGIONAL_ENDPOINT_NAME'] ?? 'regional',
       endpointType: 'PerRegion',
       regions: [this.region, secondaryRegion],
       authType: 'ApplicationManaged',
